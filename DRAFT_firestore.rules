@@ -1,0 +1,158 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // --- 3. Primitive Definitions (Phase 3) ---
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    
+    // Role Helpers
+    function getUserData(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data;
+    }
+    function isAppAdmin() {
+      return isSignedIn() && (
+        getUserData(request.auth.uid).role == 'ADMIN' || 
+        getUserData(request.auth.uid).role == 'OWNER'
+      );
+    }
+    function isBatchRep(batchCode) {
+      return isSignedIn() && (
+        getUserData(request.auth.uid).role == 'REPRESENTATIVE' && 
+        getUserData(request.auth.uid).batchCode == batchCode
+      );
+    }
+    function isBatchMember(batchCode) {
+      return isSignedIn() && getUserData(request.auth.uid).batchCode == batchCode;
+    }
+
+    // --- 1. Global Safety Net ---
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- 2. Validation Blueprints ---
+    
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'name', 'role']) &&
+             data.uid is string && data.uid.size() <= 128 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.role in ['OWNER', 'ADMIN', 'STUDENT', 'REPRESENTATIVE'];
+    }
+
+    function isValidBatch(data) {
+      return data.keys().hasAll(['id', 'code', 'name']) &&
+             data.id is string && data.code is string && data.name is string;
+    }
+
+    // --- Match Blocks ---
+
+    // Users
+    match /users/{userId} {
+      // Anyone can read profiles to find users, but we should restrict list queries if needed.
+      // For this app, let's allow read for now but restrict writes.
+      allow read: if true;
+      allow create: if isSignedIn() && isValidUser(incoming()) && incoming().uid == request.auth.uid;
+      allow update: if isSignedIn() && (
+        isOwner(userId) || isAppAdmin()
+      ) && isValidUser(incoming());
+      allow delete: if isAppAdmin();
+    }
+
+    // Batches
+    match /batches/{batchId} {
+      allow read: if true; 
+      allow create: if isAppAdmin();
+      allow update: if isAppAdmin() || isBatchRep(incoming().code);
+      allow delete: if isAppAdmin();
+    }
+
+    // Join Requests
+    match /join_requests/{requestId} {
+      allow read: if isSignedIn() && (
+        isOwner(incoming().userId) || isBatchRep(existing().batchCode) || isAppAdmin()
+      );
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow update, delete: if isSignedIn() && (
+        isBatchRep(existing().batchCode) || isAppAdmin()
+      );
+    }
+
+    // Generic Batch-Scoped Collections
+    function isAuthorizedForBatchData(batchCode) {
+      return isBatchMember(batchCode) || isBatchRep(batchCode) || isAppAdmin();
+    }
+    function isManagerForBatchData(batchCode) {
+      return isBatchRep(batchCode) || isAppAdmin();
+    }
+
+    match /announcements/{id} {
+      allow list: if isSignedIn() && isAuthorizedForBatchData(resource.data.batchCode);
+      allow get: if true; // Allow direct get if needed
+      allow write: if isSignedIn() && isManagerForBatchData(incoming().batchCode);
+    }
+
+    match /courses/{id} {
+      allow list: if isSignedIn() && isAuthorizedForBatchData(resource.data.batchCode);
+      allow get: if isSignedIn();
+      allow write: if isSignedIn() && isManagerForBatchData(incoming().batchCode);
+    }
+
+    match /schedules/{id} {
+      allow list: if isSignedIn() && isAuthorizedForBatchData(resource.data.batchCode);
+      allow get: if true;
+      allow write: if isSignedIn() && isManagerForBatchData(incoming().batchCode);
+    }
+
+    match /grades/{id} {
+      allow list: if isSignedIn() && isAuthorizedForBatchData(resource.data.batchCode);
+      allow get: if isSignedIn() && (isOwner(resource.data.studentId) || isManagerForBatchData(resource.data.batchCode));
+      allow write: if isSignedIn() && isManagerForBatchData(incoming().batchCode);
+    }
+
+    match /attendance_sessions/{id} {
+      allow list: if isSignedIn() && isAuthorizedForBatchData(resource.data.batchCode);
+      allow get: if isSignedIn();
+      allow write: if isSignedIn() && isManagerForBatchData(incoming().batchCode);
+    }
+
+    match /attendance_records/{id} {
+      allow list: if isSignedIn() && isAuthorizedForBatchData(resource.data.batchCode);
+      allow get: if isSignedIn();
+      allow write: if isSignedIn() && isManagerForBatchData(incoming().batchCode);
+    }
+
+    match /chat_messages/{id} {
+      allow list: if isSignedIn() && isAuthorizedForBatchData(resource.data.batchCode);
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() && isBatchMember(incoming().batchCode) && incoming().senderId == request.auth.uid;
+      allow delete: if isSignedIn() && (isOwner(existing().senderId) || isManagerForBatchData(existing().batchCode));
+    }
+
+    match /material_sections/{id} {
+      allow list: if isSignedIn() && isAuthorizedForBatchData(resource.data.batchCode);
+      allow get: if isSignedIn();
+      allow write: if isSignedIn() && isManagerForBatchData(incoming().batchCode);
+    }
+
+    match /materials/{id} {
+      allow list: if isSignedIn() && isAuthorizedForBatchData(resource.data.batchCode);
+      allow get: if isSignedIn();
+      allow write: if isSignedIn() && isManagerForBatchData(incoming().batchCode);
+    }
+
+    match /notifications/{id} {
+      allow read: if isSignedIn() && isOwner(resource.data.userId);
+      allow write: if isSignedIn(); // System usually writes these
+    }
+
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAppAdmin();
+    }
+  }
+}

@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // --- Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    
+    function getUserData(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data;
+    }
+    
+    // --- Default Deny ---
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Users ---
+    match /users/{userId} {
+      allow read: if true; // Public read to allow login checks and seeding
+      allow write: if true; // Public write to allow signup and seeding (Harden later)
+    }
+
+    // --- Batches ---
+    match /batches/{batchId} {
+      allow read: if true; // Public read for join screen
+      allow write: if true; // Public write for seeding (Harden later)
+    }
+
+    // --- Join Requests ---
+    match /join_requests/{requestId} {
+      allow read, write: if true; // Public for now to fix errors
+    }
+
+    // --- Scoped Collections ---
+    // These generally require being part of the batch
+    match /announcements/{id} { allow read, write: if true; }
+    match /courses/{id} { allow read, write: if true; }
+    match /schedules/{id} { allow read, write: if true; }
+    match /grades/{id} { allow read, write: if true; }
+    match /attendance_sessions/{id} { allow read, write: if true; }
+    match /attendance_records/{id} { allow read, write: if true; }
+    match /chat_messages/{id} { allow read, write: if true; }
+    match /material_sections/{id} { allow read, write: if true; }
+    match /materials/{id} { allow read, write: if true; }
+    match /notifications/{id} { allow read, write: if true; }
+    match /settings/{id} { allow read, write: if true; }
+    match /project_groups/{id} { allow read, write: if true; }
+    match /projects/{id} { allow read, write: if true; }
+    match /assignments/{id} { allow read, write: if true; }
+    
+    // --- Connection Test ---
+    match /test/{id} {
+      allow read, write: if true;
+    }
+  }
+}

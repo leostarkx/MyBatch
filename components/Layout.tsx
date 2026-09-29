@@ -1,6 +1,6 @@
 import React from 'react';
 import { Tab, UserRole, User } from '../types';
-import { Home, BookOpen, GraduationCap, MessageSquare, User as UserIcon, LogOut, Users, CalendarCheck } from 'lucide-react';
+import { Home, BookOpen, GraduationCap, MessageSquare, User as UserIcon, LogOut, Users, CalendarCheck, UserPlus, Layers, CheckSquare } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -13,18 +13,40 @@ interface LayoutProps {
 const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user, onLogout }) => {
   if (!user) return <>{children}</>;
 
-  const navItems = [
+  let navItems = [
     { id: Tab.HOME, icon: Home, label: 'الرئيسية' },
+    { id: Tab.ASSIGNMENTS, icon: CheckSquare, label: 'الواجبات' },
+    { id: Tab.SCHEDULE, icon: CalendarCheck, label: 'الجدول' },
     { id: Tab.GRADES, icon: GraduationCap, label: 'الدرجات' },
     { id: Tab.ATTENDANCE, icon: CalendarCheck, label: 'الحضور' },
     { id: Tab.MATERIALS, icon: BookOpen, label: 'المحاضرات' },
+    { id: Tab.PROJECTS, icon: Layers, label: 'المشاريع' },
     { id: Tab.CHAT, icon: MessageSquare, label: 'الدفعة' },
     { id: Tab.PROFILE, icon: UserIcon, label: 'حسابي' },
   ];
 
-  // Add Students Management Tab for Admins
-  if (user.role === UserRole.ADMIN) {
-    navItems.splice(5, 0, { id: Tab.STUDENTS, icon: Users, label: 'إدارة الطلاب' });
+  // Filter based on role and batch membership
+  if (user.role === UserRole.STUDENT && !user.batchCode) {
+    navItems = [
+      { id: Tab.HOME, icon: Home, label: 'البداية' },
+      { id: Tab.PROFILE, icon: UserIcon, label: 'حسابي' },
+    ];
+  } else {
+    // Manager tabs
+    if (user.role === UserRole.REPRESENTATIVE || user.role === UserRole.ADMIN || user.role === UserRole.OWNER) {
+      navItems.splice(6, 0, { id: Tab.STUDENTS, icon: Users, label: 'إدارة الطلاب' });
+      navItems.splice(7, 0, { id: Tab.COURSES, icon: BookOpen, label: 'المواد' });
+    }
+    
+    // Representative and Owner specific tabs
+    if (user.role === UserRole.REPRESENTATIVE || user.role === UserRole.OWNER) {
+      navItems.splice(8, 0, { id: Tab.REQUESTS, icon: UserPlus, label: 'الطلبات' });
+    }
+
+    // Owner specific tabs
+    if (user.role === UserRole.OWNER) {
+      navItems.push({ id: Tab.BATCHES, icon: BookOpen, label: 'نسخ الدفعات' });
+    }
   }
 
   return (
@@ -44,7 +66,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user,
           </div>
         </div>
 
-        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+        <nav className="flex-1 p-4 space-y-2 overflow-y-auto no-scrollbar">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -71,7 +93,9 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user,
             <img src={user.avatar} className="w-10 h-10 rounded-full border-2 border-white dark:border-slate-600 shadow-sm" alt="User" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-bold text-gray-800 dark:text-white truncate">{user.name}</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{user.role === 'ADMIN' ? 'مسؤول النظام' : 'طالب'}</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                {user.role === UserRole.OWNER ? 'المطور الرئيسي (المالك)' : user.role === UserRole.ADMIN ? 'مشرف النظام' : user.role === UserRole.REPRESENTATIVE ? 'ممثل الدفعة' : 'طالب'}
+              </p>
             </div>
             <button onClick={onLogout} className="text-gray-400 hover:text-red-500 transition">
               <LogOut size={18} />
@@ -102,7 +126,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user,
         </main>
 
         {/* Mobile Bottom Navigation */}
-        <nav className="md:hidden absolute bottom-0 w-full bg-white/90 dark:bg-slate-800/90 backdrop-blur-lg border-t border-gray-200 dark:border-slate-700 flex justify-around items-center py-2 pb-5 z-30 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] transition-colors duration-300">
+        <nav className="md:hidden absolute bottom-0 w-full bg-white/90 dark:bg-slate-800/90 backdrop-blur-lg border-t border-gray-200 dark:border-slate-700 flex overflow-x-auto no-scrollbar items-center py-2 pb-5 z-30 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] transition-colors duration-300 px-2 gap-1">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -110,15 +134,15 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user,
               <button
                 key={item.id}
                 onClick={() => onTabChange(item.id)}
-                className={`flex flex-col items-center p-2 transition-all duration-300 relative ${
+                className={`flex flex-col items-center py-1 px-2.5 min-w-[62px] shrink-0 transition-all duration-300 relative ${
                   isActive ? 'text-primary -translate-y-1' : 'text-gray-400 dark:text-gray-500'
                 }`}
               >
                 <div className={`p-1.5 rounded-xl transition-all ${isActive ? 'bg-primary/10' : ''}`}>
-                    <Icon size={24} strokeWidth={isActive ? 2.5 : 2} />
+                    <Icon size={22} strokeWidth={isActive ? 2.5 : 2} />
                 </div>
-                <span className={`text-[10px] mt-1 font-medium transition-opacity ${isActive ? 'opacity-100' : 'opacity-70'}`}>{item.label}</span>
-                {isActive && <span className="absolute bottom-1 w-1 h-1 bg-primary rounded-full"></span>}
+                <span className={`text-[10px] mt-0.5 font-medium whitespace-nowrap transition-opacity ${isActive ? 'opacity-100 font-bold' : 'opacity-70'}`}>{item.label}</span>
+                {isActive && <span className="absolute bottom-0 w-1 h-1 bg-primary rounded-full"></span>}
               </button>
             );
           })}

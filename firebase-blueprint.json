@@ -1,0 +1,291 @@
+{
+  "entities": {
+    "user": {
+      "title": "User",
+      "description": "User profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["OWNER", "ADMIN", "STUDENT", "REPRESENTATIVE"] },
+        "studentId": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "pendingBatchCode": { "type": "string" },
+        "avatar": { "type": "string" },
+        "isOfficial": { "type": "boolean" },
+        "bio": { "type": "string" },
+        "banner": { "type": "string" },
+        "signatureColor": { "type": "string" }
+      },
+      "required": ["uid", "name", "role"]
+    },
+    "batch": {
+      "title": "Batch",
+      "description": "University class instance",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "department": { "type": "string" },
+        "stage": { "type": "string" },
+        "representativeUid": { "type": "string" },
+        "representativeName": { "type": "string" },
+        "chatLocked": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "code", "name"]
+    },
+    "joinRequest": {
+      "title": "JoinRequest",
+      "description": "Student application to join a batch",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userEmail": { "type": "string", "format": "email" },
+        "userAvatar": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"] },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "userId", "batchCode", "status", "timestamp"]
+    },
+    "schedule": {
+      "title": "Schedule",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "courseId": { "type": "string" },
+        "courseName": { "type": "string" },
+        "professor": { "type": "string" },
+        "day": { "type": "string" },
+        "date": { "type": "string" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "hall": { "type": "string" },
+        "isCancelled": { "type": "boolean" },
+        "note": { "type": "string" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "batchCode", "courseName", "day", "startTime", "endTime"]
+    },
+    "setting": {
+      "title": "Setting",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "chatLocked": { "type": "boolean" },
+        "lockNotice": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "announcement": {
+      "title": "Announcement",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "priority": { "type": "string", "enum": ["normal", "high"] },
+        "courseId": { "type": "string" },
+        "courseName": { "type": "string" },
+        "mediaUrl": { "type": "string" },
+        "mediaType": { "type": "string", "enum": ["image", "video", "link"] }
+      },
+      "required": ["id", "batchCode", "title", "content", "timestamp", "authorId", "authorName"]
+    },
+    "course": {
+      "title": "Course",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" }
+      },
+      "required": ["id", "batchCode", "name"]
+    },
+    "projectGroup": {
+      "title": "ProjectGroup",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "courseId": { "type": "string" },
+        "courseName": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "members": { "type": "array", "items": { "type": "string" } },
+        "leaderId": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "batchCode", "courseId", "name", "members", "createdAt"]
+    },
+    "project": {
+      "title": "Project",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "title": { "type": "string" },
+        "courseId": { "type": "string" },
+        "courseName": { "type": "string" },
+        "description": { "type": "string" },
+        "deadline": { "type": "string" },
+        "groups": { "type": "array" },
+        "createdAt": { "type": "number" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["id", "batchCode", "title", "courseId", "groups", "createdAt"]
+    },
+    "assignment": {
+      "title": "Assignment",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "title": { "type": "string" },
+        "courseId": { "type": "string" },
+        "courseName": { "type": "string" },
+        "description": { "type": "string" },
+        "dueDate": { "type": "string" },
+        "dueTimestamp": { "type": "number" },
+        "attachments": { "type": "array" },
+        "completedBy": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "number" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["id", "batchCode", "title", "courseId", "dueDate", "dueTimestamp", "createdAt"]
+    },
+    "grade": {
+      "title": "Grade",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "studentId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "assessmentId": { "type": "string" },
+        "score": { "type": "number" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "batchCode", "studentId", "courseId", "assessmentId", "score"]
+    },
+    "attendanceSession": {
+      "title": "AttendanceSession",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "courseId": { "type": "string" },
+        "date": { "type": "string" },
+        "title": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "batchCode", "courseId", "date"]
+    },
+    "attendanceRecord": {
+      "title": "AttendanceRecord",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "status": { "type": "string", "enum": ["PRESENT", "ABSENT"] },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "batchCode", "sessionId", "studentId", "status"]
+    },
+    "chatMessage": {
+      "title": "ChatMessage",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderRole": { "type": "string", "enum": ["OWNER", "ADMIN", "STUDENT", "REPRESENTATIVE"] },
+        "senderAvatar": { "type": "string" },
+        "senderColor": { "type": "string" },
+        "content": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "type": { "type": "string", "enum": ["text", "image", "video", "link", "file"] },
+        "mediaUrl": { "type": "string" },
+        "expiresAt": { "type": "number" }
+      },
+      "required": ["id", "batchCode", "senderId", "senderName", "content", "timestamp"]
+    },
+    "materialSection": {
+      "title": "MaterialSection",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "courseId": { "type": "string" },
+        "title": { "type": "string" },
+        "icon": { "type": "string", "enum": ["FOLDER", "BOOK", "FLASK"] }
+      },
+      "required": ["id", "batchCode", "courseId", "title"]
+    },
+    "material": {
+      "title": "Material",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchCode": { "type": "string" },
+        "courseId": { "type": "string" },
+        "sectionId": { "type": "string" },
+        "title": { "type": "string" },
+        "type": { "type": "string", "enum": ["PDF", "IMAGE", "LINK"] },
+        "url": { "type": "string" },
+        "uploadDate": { "type": "string" }
+      },
+      "required": ["id", "batchCode", "courseId", "sectionId", "title", "type", "url"]
+    },
+    "notification": {
+      "title": "Notification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["MENTION", "ANNOUNCEMENT"] },
+        "content": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "timestamp": { "type": "number" },
+        "linkTo": { "type": "string" }
+      },
+      "required": ["id", "userId", "type", "content", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/batches/{batchId}": { "schema": "batch", "description": "Batches" },
+    "/join_requests/{requestId}": { "schema": "joinRequest", "description": "Join Requests" },
+    "/schedules/{scheduleId}": { "schema": "schedule", "description": "Schedules" },
+    "/settings/{settingId}": { "schema": "setting", "description": "Settings" },
+    "/users/{userId}": { "schema": "user", "description": "Users" },
+    "/announcements/{announcementId}": { "schema": "announcement", "description": "Announcements" },
+    "/courses/{courseId}": { "schema": "course", "description": "Courses" },
+    "/grades/{gradeId}": { "schema": "grade", "description": "Grades" },
+    "/attendance_sessions/{sessionId}": { "schema": "attendanceSession", "description": "Sessions" },
+    "/attendance_records/{recordId}": { "schema": "attendanceRecord", "description": "Records" },
+    "/chat_messages/{messageId}": { "schema": "chatMessage", "description": "Chat" },
+    "/material_sections/{sectionId}": { "schema": "materialSection", "description": "Sections" },
+    "/materials/{materialId}": { "schema": "material", "description": "Materials" },
+    "/notifications/{notificationId}": { "schema": "notification", "description": "Notifications" },
+    "/project_groups/{groupId}": { "schema": "projectGroup", "description": "Project Groups" },
+    "/projects/{projectId}": { "schema": "project", "description": "Course Projects" },
+    "/assignments/{assignmentId}": { "schema": "assignment", "description": "Assignments and Homework" }
+  }
+}
