@@ -87,7 +87,18 @@ import {
   ChevronUp,
   Sparkles,
   CheckCircle2,
+  Eye,
+  CloudUpload,
 } from "lucide-react";
+
+// --- Storage & Direct File Utilities ---
+import {
+  downloadFile,
+  uploadFileToStorage,
+  getStorageConfig,
+  saveStorageConfig,
+  StorageConfig,
+} from "./services/storageService";
 
 // --- Mock Data Imports ---
 import {
@@ -630,6 +641,9 @@ export default function App() {
   // Course Creation/Editing State
   const [isAddingCourse, setIsAddingCourse] = useState(false);
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
+  const [editingCourse, setEditingCourse] = useState<Course | null>(null);
+  const [editCourseName, setEditCourseName] = useState("");
+  const [editCourseProf, setEditCourseProf] = useState("");
   const [newCourseName, setNewCourseName] = useState("");
   const [newSimpleCourseName, setNewSimpleCourseName] = useState("");
   const [simpleCourseProf, setSimpleCourseProf] = useState("");
@@ -641,6 +655,31 @@ export default function App() {
   const [newAssessmentName, setNewAssessmentName] = useState("");
   const [newAssessmentScore, setNewAssessmentScore] = useState("");
   const [newAssessmentDate, setNewAssessmentDate] = useState("");
+
+  // Direct Device File Upload Refs & State
+  const materialFileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingMaterial, setIsUploadingMaterial] = useState(false);
+  const assignFileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingAssignFile, setIsUploadingAssignFile] = useState(false);
+  const announcementFileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingAnnouncementFile, setIsUploadingAnnouncementFile] = useState(false);
+
+  // Storage Configuration & Real Upload Progress
+  const [storageConfig, setStorageConfig] = useState<StorageConfig | null>(null);
+  const [isConfiguringStorage, setIsConfiguringStorage] = useState(false);
+  const [tempCloudName, setTempCloudName] = useState("");
+  const [tempUploadPreset, setTempUploadPreset] = useState("");
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  // In-App File & Image Viewer Modal State
+  const [previewItem, setPreviewItem] = useState<{
+    title: string;
+    url: string;
+    type: "PDF" | "IMAGE" | "LINK" | "file";
+    date?: string;
+  } | null>(null);
+  const [previewZoom, setPreviewZoom] = useState(1);
+  const [previewRotation, setPreviewRotation] = useState(0);
 
   // Grade Editing State (Admin)
   const [isEditingGrades, setIsEditingGrades] = useState(false);
@@ -746,6 +785,14 @@ export default function App() {
     const unsubSettings = subscribeSettings((settings) => {
       if (settings["chat_settings"]) {
         setIsChatLocked(Boolean(settings["chat_settings"].chatLocked));
+      }
+    });
+
+    getStorageConfig().then((cfg) => {
+      if (cfg) {
+        setStorageConfig(cfg);
+        setTempCloudName(cfg.cloudinaryCloudName || "");
+        setTempUploadPreset(cfg.cloudinaryUploadPreset || "");
       }
     });
 
@@ -1421,15 +1468,222 @@ export default function App() {
   };
 
   const handleStartEditCourse = (course: Course) => {
-    setEditingCourseId(course.id);
-    setNewCourseName(course.name);
-    setCourseProfessors(course.professors);
-    setNewAssessments(course.assessments);
-    setIsAddingCourse(true);
+    setEditingCourse(course);
+    setEditCourseName(course.name);
+    setEditCourseProf(course.professors?.join("، ") || "");
+  };
+
+  const handleSaveEditedCourse = async () => {
+    if (!editingCourse || !editCourseName.trim()) {
+      alert("يرجى إدخال اسم المادة الدراسية");
+      return;
+    }
+
+    const trimmedName = editCourseName.trim();
+    const profs = editCourseProf.trim()
+      ? editCourseProf
+          .split(/[،,]/)
+          .map((p) => p.trim())
+          .filter(Boolean)
+      : editingCourse.professors && editingCourse.professors.length > 0
+      ? editingCourse.professors
+      : ["غير محدد"];
+
+    const updatedCourse: Course = {
+      ...editingCourse,
+      name: trimmedName,
+      professors: profs,
+    };
+
+    await saveCourseToFirestore(updatedCourse);
+
+    // Update activeMatCourse if currently open
+    if (activeMatCourse && activeMatCourse.id === editingCourse.id) {
+      setActiveMatCourse(updatedCourse);
+    }
+
+    // Propagate to existing lecture schedules
+    const matchingSchedules = schedules.filter(
+      (s) => s.courseName === editingCourse.name || s.courseId === editingCourse.id
+    );
+    for (const sched of matchingSchedules) {
+      await saveScheduleToFirestore({
+        ...sched,
+        courseName: trimmedName,
+        courseId: editingCourse.id,
+        professor: profs[0] || sched.professor,
+      });
+    }
+
+    // Propagate to assignments
+    const matchingAssignments = assignments.filter(
+      (a) => a.courseId === editingCourse.id || a.courseName === editingCourse.name
+    );
+    for (const assign of matchingAssignments) {
+      await saveAssignmentToFirestore({
+        ...assign,
+        courseName: trimmedName,
+      });
+    }
+
+    // Propagate to projects
+    const matchingProjects = projects.filter(
+      (p) => p.courseId === editingCourse.id || p.courseName === editingCourse.name
+    );
+    for (const proj of matchingProjects) {
+      await saveProjectToFirestore({
+        ...proj,
+        courseName: trimmedName,
+      });
+    }
+
+    // Propagate to announcements
+    const matchingAnnouncements = announcements.filter(
+      (a) => a.courseId === editingCourse.id || a.courseName === editingCourse.name
+    );
+    for (const ann of matchingAnnouncements) {
+      await saveAnnouncementToFirestore({
+        ...ann,
+        courseName: trimmedName,
+      });
+    }
+
+    setEditingCourse(null);
+    setEditCourseName("");
+    setEditCourseProf("");
   };
 
   const handleDeleteCourse = async (courseId: string) => {
+    if (!confirm("هل أنت متأكد من حذف هذه المادة؟")) return;
     await deleteCourseFromFirestore(courseId);
+  };
+
+  const handleSaveStorageConfig = async () => {
+    if (!tempCloudName.trim() || !tempUploadPreset.trim()) {
+      alert("يرجى إدخال اسم السحابة واسم الـ Upload Preset");
+      return;
+    }
+    const cfg: StorageConfig = {
+      cloudinaryCloudName: tempCloudName.trim(),
+      cloudinaryUploadPreset: tempUploadPreset.trim(),
+    };
+    await saveStorageConfig(cfg);
+    setStorageConfig(cfg);
+    setIsConfiguringStorage(false);
+    alert("تم حفظ وتفعيل مساحة التخزين السحابي (Cloudinary 25GB) بنجاح! ✅");
+  };
+
+  const handleDownloadMaterial = (mat: Material) => {
+    const ext = mat.type === "PDF" ? "pdf" : mat.type === "IMAGE" ? "jpg" : "txt";
+    downloadFile(mat.url, `${mat.title}.${ext}`);
+  };
+
+  // --- Direct Device File Upload Handlers ---
+  const handleMaterialFilePick = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!newMatTitle.trim()) {
+      const cleanName = file.name.replace(/\.[^/.]+$/, "");
+      setNewMatTitle(cleanName);
+    }
+
+    setIsUploadingMaterial(true);
+    setUploadProgress(0);
+    try {
+      const result = await uploadFileToStorage(
+        file,
+        storageConfig,
+        (pct) => setUploadProgress(pct)
+      );
+      setNewMatUrl(result.url);
+      setNewMatType(
+        result.type === "IMAGE" ? "IMAGE" : result.type === "PDF" ? "PDF" : "LINK"
+      );
+    } catch (err: any) {
+      console.error("Material upload error:", err);
+      alert(err.message || "حدث خطأ أثناء رفع الملف من الجهاز");
+    } finally {
+      setIsUploadingMaterial(false);
+      setUploadProgress(0);
+      if (materialFileInputRef.current) {
+        materialFileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const handleAssignFilePick = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingAssignFile(true);
+    try {
+      if (file.type.startsWith("image/")) {
+        setNewAssignAttachmentType("image");
+        const compressed = await compressImage(file, {
+          maxWidth: 1000,
+          maxHeight: 1000,
+          quality: 0.75,
+        });
+        setNewAssignAttachmentUrl(compressed);
+      } else {
+        setNewAssignAttachmentType("file");
+        if (file.size > 850 * 1024) {
+          alert(
+            "تنبيه: حجم الملف كبير. يفضل رفع ملفات أقل من 850 كيلوبايت أو مشاركة رابط خارجي للملفات الكبيرة."
+          );
+        }
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          setNewAssignAttachmentUrl(ev.target?.result as string);
+        };
+        reader.readAsDataURL(file);
+      }
+    } catch (err) {
+      console.error("Assign file error:", err);
+    } finally {
+      setIsUploadingAssignFile(false);
+    }
+  };
+
+  const handleAnnouncementFilePick = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingAnnouncementFile(true);
+    try {
+      if (file.type.startsWith("image/")) {
+        setNewAnnouncementMediaType("image");
+        const compressed = await compressImage(file, {
+          maxWidth: 1200,
+          maxHeight: 1200,
+          quality: 0.75,
+        });
+        setNewAnnouncementMediaUrl(compressed);
+      } else if (file.type.startsWith("video/")) {
+        setNewAnnouncementMediaType("video");
+        if (file.size > 850 * 1024) {
+          alert(
+            "تنبيه: حجم الفيديو كبير جداً للتخزين المباشر. يفضل استخدام رابط فيديو خارجي مثل Google Drive أو YouTube."
+          );
+        }
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          setNewAnnouncementMediaUrl(ev.target?.result as string);
+        };
+        reader.readAsDataURL(file);
+      }
+    } catch (err) {
+      console.error("Announcement media error:", err);
+    } finally {
+      setIsUploadingAnnouncementFile(false);
+    }
   };
 
   // --- Grades Logic ---
@@ -2225,26 +2479,58 @@ export default function App() {
                   onChange={(e) => setNewAnnouncementContent(e.target.value)}
                 ></textarea>
                 
-                <div className="p-4 bg-gray-50 dark:bg-slate-900/50 rounded-2xl border border-gray-100 dark:border-slate-700">
-                  <label className="text-[10px] font-bold text-gray-400 mb-2 block uppercase tracking-wider">وسائط الإعلان (اختياري)</label>
+                <div className="p-4 bg-gray-50 dark:bg-slate-900/50 rounded-2xl border border-gray-100 dark:border-slate-700 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] font-bold text-gray-400 block uppercase tracking-wider">وسائط الإعلان (اختياري)</label>
+                    <input
+                      type="file"
+                      ref={announcementFileInputRef}
+                      onChange={handleAnnouncementFilePick}
+                      accept="image/*,video/*"
+                      hidden
+                    />
+                    <button
+                      type="button"
+                      onClick={() => announcementFileInputRef.current?.click()}
+                      disabled={isUploadingAnnouncementFile}
+                      className="bg-primary/10 hover:bg-primary/20 text-primary px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1"
+                    >
+                      {isUploadingAnnouncementFile ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                      اختر صورة من جهازك
+                    </button>
+                  </div>
                   <div className="flex flex-col md:flex-row gap-3">
                     <input
                       type="text"
-                      placeholder="رابط الصورة، الفيديو، أو موقع خارجي..."
+                      placeholder="أو اكتب رابط الصورة، الفيديو، أو موقع خارجي..."
                       className="flex-1 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs outline-none"
-                      value={newAnnouncementMediaUrl}
+                      value={newAnnouncementMediaUrl.startsWith("data:") ? "(تم اختيار صورة من الجهاز ✅)" : newAnnouncementMediaUrl}
                       onChange={(e) => setNewAnnouncementMediaUrl(e.target.value)}
+                      disabled={newAnnouncementMediaUrl.startsWith("data:")}
                     />
                     <select
                       value={newAnnouncementMediaType}
                       onChange={(e) => setNewAnnouncementMediaType(e.target.value as any)}
-                      className="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs outline-none"
+                      disabled={newAnnouncementMediaUrl.startsWith("data:")}
+                      className="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs outline-none cursor-pointer"
                     >
                       <option value="image">صورة</option>
                       <option value="video">فيديو</option>
                       <option value="link">رابط</option>
                     </select>
                   </div>
+                  {newAnnouncementMediaUrl.startsWith("data:") && (
+                    <div className="flex justify-between items-center text-[10px] text-emerald-600 font-bold px-1">
+                      <span>تم إرفاق الصورة من جهازك بنجاح ✅</span>
+                      <button
+                        type="button"
+                        onClick={() => setNewAnnouncementMediaUrl("")}
+                        className="text-red-500 hover:underline"
+                      >
+                        إلغاء المرفق
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex gap-4">
@@ -3150,152 +3436,346 @@ export default function App() {
       );
 
       return (
-        <div className="space-y-6 p-4">
-          <div className="flex items-center gap-4 mb-6">
-            <button
-              onClick={() => setActiveMatSection(null)}
-              className="p-2 bg-white dark:bg-slate-800 rounded-xl shadow-sm hover:bg-gray-50 dark:hover:bg-slate-700 transition"
-            >
-              <ChevronLeft
-                size={20}
-                className="rtl:rotate-180 text-gray-600 dark:text-gray-300"
-              />
-            </button>
-            <div>
-              <h2 className="text-xl font-bold text-gray-800 dark:text-white">
-                {activeMatSection.title}
-              </h2>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                {activeMatCourse.name}
-              </p>
-            </div>
-            {isManager && (
+        <div className="space-y-6 p-4 animate-in fade-in duration-300">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-6 bg-white dark:bg-slate-800 p-4 rounded-3xl border border-gray-100 dark:border-slate-700 shadow-sm">
+            <div className="flex items-center gap-3">
               <button
-                onClick={() => setIsAddingMaterial(true)}
-                className="mr-auto bg-primary text-white px-4 py-2 rounded-xl text-sm font-bold shadow-lg shadow-primary/30 hover:bg-primary/90 transition flex items-center gap-2"
+                onClick={() => setActiveMatSection(null)}
+                className="p-2.5 bg-gray-50 dark:bg-slate-700 rounded-2xl shadow-sm hover:bg-gray-100 dark:hover:bg-slate-600 transition"
+                title="الرجوع للمجلدات"
               >
-                <Upload size={18} />
-                رفع ملف
+                <ChevronLeft
+                  size={20}
+                  className="rtl:rotate-180 text-gray-600 dark:text-gray-300"
+                />
               </button>
-            )}
+              <div>
+                <h2 className="text-xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                  <Folder size={22} className="text-amber-500" />
+                  {activeMatSection.title}
+                </h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  {activeMatCourse.name} • 👨‍🏫 {activeMatCourse.professors?.join("، ") || "غير محدد"}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 mr-auto">
+              {isManager && (
+                <button
+                  onClick={() => setIsAddingMaterial(true)}
+                  className="bg-primary text-white px-5 py-2.5 rounded-2xl text-xs md:text-sm font-bold shadow-lg shadow-primary/30 hover:bg-primary/90 transition flex items-center gap-2 active:scale-95"
+                >
+                  <Upload size={18} />
+                  رفع محاضرة أو صورة
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {sectionMaterials.map((mat) => (
               <div
                 key={mat.id}
-                className="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 hover:shadow-md transition group relative"
+                className="bg-white dark:bg-slate-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 hover:shadow-md transition flex flex-col justify-between group relative overflow-hidden"
               >
-                <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-gray-50 dark:bg-slate-700 flex items-center justify-center text-gray-400 dark:text-gray-300 flex-shrink-0">
-                    {mat.type === "PDF" && (
-                      <FileText size={24} className="text-red-500" />
-                    )}
-                    {mat.type === "IMAGE" && (
-                      <ImageIcon size={24} className="text-blue-500" />
-                    )}
-                    {mat.type === "LINK" && (
-                      <LinkIcon size={24} className="text-green-500" />
+                <div>
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-12 h-12 rounded-2xl bg-primary/10 dark:bg-primary/20 flex items-center justify-center text-primary flex-shrink-0">
+                        {mat.type === "PDF" && <FileText size={24} className="text-red-500" />}
+                        {mat.type === "IMAGE" && <ImageIcon size={24} className="text-blue-500" />}
+                        {mat.type === "LINK" && <LinkIcon size={24} className="text-green-500" />}
+                      </div>
+                      <div className="min-w-0">
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            mat.type === "PDF"
+                              ? "bg-red-50 text-red-600 dark:bg-red-950/50 dark:text-red-400"
+                              : mat.type === "IMAGE"
+                              ? "bg-blue-50 text-blue-600 dark:bg-blue-950/50 dark:text-blue-400"
+                              : "bg-green-50 text-green-600 dark:bg-green-950/50 dark:text-green-400"
+                          }`}
+                        >
+                          {mat.type === "PDF" ? "مستند PDF" : mat.type === "IMAGE" ? "صورة" : "رابط خارجي"}
+                        </span>
+                        <h4
+                          className="font-bold text-gray-800 dark:text-white truncate mt-1 text-sm md:text-base"
+                          title={mat.title}
+                        >
+                          {mat.title}
+                        </h4>
+                      </div>
+                    </div>
+
+                    {isManager && (
+                      <button
+                        onClick={() => handleDeleteMaterialItem(mat.id)}
+                        className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition"
+                        title="حذف المحاضرة"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     )}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <h4
-                      className="font-bold text-gray-800 dark:text-white truncate mb-1"
-                      title={mat.title}
+
+                  {/* Thumbnail preview if Image */}
+                  {mat.type === "IMAGE" && mat.url && (
+                    <div
+                      onClick={() =>
+                        setPreviewItem({
+                          title: mat.title,
+                          url: mat.url,
+                          type: mat.type,
+                          date: mat.uploadDate,
+                        })
+                      }
+                      className="mb-3 h-36 rounded-2xl overflow-hidden bg-gray-100 dark:bg-slate-700/50 cursor-pointer relative group/img border border-gray-100 dark:border-slate-700"
                     >
-                      {mat.title}
-                    </h4>
-                    <p className="text-xs text-gray-400">
-                      {new Date(mat.uploadDate).toLocaleDateString("ar-EG")}
-                    </p>
-                    <a
-                      href={mat.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline"
-                    >
-                      {mat.type === "LINK" ? "فتح الرابط" : "تحميل الملف"}
-                      <ArrowRight size={12} className="rtl:rotate-180" />
-                    </a>
-                  </div>
-                  {isManager && (
-                    <button
-                      onClick={() => handleDeleteMaterialItem(mat.id)}
-                      className="text-gray-300 hover:text-red-500 transition"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                      <img
+                        src={mat.url}
+                        alt={mat.title}
+                        className="w-full h-full object-cover group-hover/img:scale-105 transition duration-300"
+                      />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition flex items-center justify-center text-white gap-1.5 text-xs font-bold">
+                        <Eye size={18} /> عرض بالكامل
+                      </div>
+                    </div>
                   )}
+
+                  <p className="text-xs text-gray-400 mb-4 flex items-center gap-1.5">
+                    <Clock size={12} />
+                    {new Date(mat.uploadDate).toLocaleDateString("ar-EG", {
+                      year: "numeric",
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </p>
+                </div>
+
+                {/* Direct Action Buttons: 1) Open in App  2) Download directly to device */}
+                <div className="grid grid-cols-2 gap-2 pt-3 border-t border-gray-100 dark:border-slate-700/60">
+                  <button
+                    onClick={() =>
+                      setPreviewItem({
+                        title: mat.title,
+                        url: mat.url,
+                        type: mat.type,
+                        date: mat.uploadDate,
+                      })
+                    }
+                    className="flex items-center justify-center gap-1.5 bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-light py-2.5 px-3 rounded-2xl text-xs font-bold transition active:scale-95"
+                    title="فتح وعرض المحاضرة مباشرة داخل التطبيق"
+                  >
+                    <Eye size={15} />
+                    <span>فتح بالتطبيق</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleDownloadMaterial(mat)}
+                    className="flex items-center justify-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white py-2.5 px-3 rounded-2xl text-xs font-bold shadow-md shadow-emerald-500/20 transition active:scale-95"
+                    title="تنزيل المحاضرة مباشرة إلى جهازك"
+                  >
+                    <Download size={15} />
+                    <span>تنزيل بالجهاز</span>
+                  </button>
                 </div>
               </div>
             ))}
+
             {sectionMaterials.length === 0 && (
-              <div className="col-span-full py-12 text-center text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-gray-100 dark:border-slate-700 border-dashed">
-                لا توجد ملفات في هذا القسم.
+              <div className="col-span-full py-16 text-center text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-gray-100 dark:border-slate-700 border-dashed">
+                <BookOpen size={48} className="mx-auto mb-2 opacity-30 text-primary" />
+                <p className="font-bold text-gray-700 dark:text-gray-300">لا توجد محاضرات في هذا المجلد بعد.</p>
+                <p className="text-xs text-gray-400 mt-1">يمكن للممثل إضافة محاضرات بصيغة PDF أو صور مباشرة من جهازه.</p>
               </div>
             )}
           </div>
 
           {/* Add Material Modal */}
           {isAddingMaterial && (
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-              <div className="bg-white dark:bg-slate-800 w-full max-w-sm rounded-3xl shadow-2xl p-6 animate-in zoom-in-95">
-                <h3 className="font-bold text-lg text-gray-800 dark:text-white mb-4">
-                  إضافة ملف جديد
-                </h3>
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-slate-800 w-full max-w-md rounded-3xl shadow-2xl p-6 animate-in zoom-in-95 border border-gray-100 dark:border-slate-700 max-h-[90vh] overflow-y-auto">
+                <div className="flex justify-between items-center mb-4 pb-2 border-b border-gray-100 dark:border-slate-700">
+                  <div className="flex items-center gap-2">
+                    <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                      <Upload size={20} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-lg text-gray-800 dark:text-white">
+                        إضافة محاضرة أو ملف
+                      </h3>
+                      <p className="text-xs text-gray-400">
+                        {activeMatCourse.name} • {activeMatSection.title}
+                      </p>
+                    </div>
+                  </div>
+                  <button onClick={() => setIsAddingMaterial(false)} className="text-gray-400 hover:text-gray-600 p-1">
+                    <X size={20} />
+                  </button>
+                </div>
+
                 <div className="space-y-4">
+                  {/* Direct Device Upload Button */}
+                  <div className="p-4 bg-primary/5 dark:bg-primary/10 border-2 border-dashed border-primary/30 rounded-2xl text-center">
+                    <input
+                      type="file"
+                      ref={materialFileInputRef}
+                      onChange={handleMaterialFilePick}
+                      accept=".pdf,.doc,.docx,.ppt,.pptx,image/*"
+                      hidden
+                    />
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
+                        {isUploadingMaterial ? <Loader2 size={24} className="animate-spin" /> : <Upload size={24} />}
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-gray-800 dark:text-white">
+                          رفع ملف أو صورة مباشرة من جهازك
+                        </p>
+                        <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+                          يدعم مستندات PDF والصور من الهاتف أو الحاسوب
+                        </p>
+                      </div>
+
+                      {/* Real Progress Bar */}
+                      {isUploadingMaterial && (
+                        <div className="w-full mt-2">
+                          <div className="flex justify-between text-[11px] font-bold text-primary mb-1">
+                            <span>جاري رفع الملف...</span>
+                            <span>{uploadProgress}%</span>
+                          </div>
+                          <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-2 overflow-hidden">
+                            <div
+                              className="bg-primary h-full transition-all duration-200"
+                              style={{ width: `${Math.max(5, uploadProgress)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => materialFileInputRef.current?.click()}
+                        disabled={isUploadingMaterial}
+                        className="mt-1 bg-primary text-white hover:bg-primary/90 px-5 py-2.5 rounded-xl text-xs font-bold shadow-md transition flex items-center gap-1.5 active:scale-95"
+                      >
+                        <FolderPlus size={16} />
+                        اختر ملف من جهازك
+                      </button>
+                    </div>
+
+                    {newMatUrl && (
+                      <div className="mt-3 p-2.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-xl text-xs font-bold flex items-center justify-between border border-emerald-200 dark:border-emerald-800">
+                        <span className="truncate">تم تجهيز الملف بنجاح ✅ ({newMatType})</span>
+                        <button
+                          type="button"
+                          onClick={() => setNewMatUrl("")}
+                          className="text-red-500 hover:underline text-[10px]"
+                        >
+                          إلغاء
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {storageConfig?.cloudinaryCloudName ? (
+                    <div className="flex items-center justify-between p-2 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 rounded-xl text-[11px] font-bold border border-emerald-200 dark:border-emerald-900/50">
+                      <span>سحابة Cloudinary مفعلة (25GB) ✅</span>
+                      <button
+                        type="button"
+                        onClick={() => setIsConfiguringStorage(true)}
+                        className="text-primary hover:underline text-[10px]"
+                      >
+                        تعديل
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between p-2 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 rounded-xl text-[11px] border border-amber-200 dark:border-amber-900/50">
+                      <span>هل تريد رفع ملفات ضخمة (أكثر من 1MB)؟</span>
+                      <button
+                        type="button"
+                        onClick={() => setIsConfiguringStorage(true)}
+                        className="text-primary font-bold hover:underline text-[10px] mr-1"
+                      >
+                        تفعيل Cloudinary مجاناً
+                      </button>
+                    </div>
+                  )}
+
                   <div>
-                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                      عنوان الملف
+                    <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1 block">
+                      عنوان الملف أو المحاضرة <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
                       value={newMatTitle}
                       onChange={(e) => setNewMatTitle(e.target.value)}
-                      className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-2 text-sm outline-none"
-                      placeholder="مثال: المحاضرة الأولى"
+                      className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/20"
+                      placeholder="مثال: المحاضرة الأولى - مقدمة عامة"
                     />
                   </div>
+
                   <div>
-                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
+                    <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1 block">
                       نوع الملف
                     </label>
                     <div className="flex gap-2">
                       {(["PDF", "IMAGE", "LINK"] as const).map((t) => (
                         <button
                           key={t}
+                          type="button"
                           onClick={() => setNewMatType(t)}
-                          className={`flex-1 py-2 rounded-xl text-xs font-bold border ${newMatType === t ? "bg-primary text-white border-primary" : "bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-slate-600"}`}
+                          className={`flex-1 py-2 rounded-xl text-xs font-bold border transition ${
+                            newMatType === t
+                              ? "bg-primary text-white border-primary shadow-sm"
+                              : "bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-slate-600"
+                          }`}
                         >
-                          {t}
+                          {t === "PDF" ? "مستند PDF" : t === "IMAGE" ? "صورة" : "رابط"}
                         </button>
                       ))}
                     </div>
                   </div>
+
                   <div>
-                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                      الرابط (URL)
+                    <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1 block">
+                      أو رابط خارجي (Google Drive، OneDrive...)
                     </label>
                     <input
                       type="text"
-                      value={newMatUrl}
+                      value={
+                        newMatUrl.startsWith("data:")
+                          ? "(تم اختيار الملف من الجهاز مباشرة)"
+                          : newMatUrl
+                      }
                       onChange={(e) => setNewMatUrl(e.target.value)}
-                      className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-2 text-sm outline-none"
-                      placeholder="https://..."
+                      disabled={newMatUrl.startsWith("data:")}
+                      className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-2 text-xs outline-none focus:ring-2 focus:ring-primary/20"
+                      placeholder="https://drive.google.com/..."
                     />
                   </div>
-                  <div className="flex gap-2 pt-2">
+
+                  <div className="flex gap-2 pt-2 border-t border-gray-100 dark:border-slate-700">
                     <button
-                      onClick={() => setIsAddingMaterial(false)}
-                      className="flex-1 bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 py-2 rounded-xl font-bold text-sm"
+                      type="button"
+                      onClick={() => {
+                        setIsAddingMaterial(false);
+                        setNewMatTitle("");
+                        setNewMatUrl("");
+                      }}
+                      className="flex-1 bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 py-2.5 rounded-xl font-bold text-sm hover:bg-gray-200 transition"
                     >
                       إلغاء
                     </button>
                     <button
+                      type="button"
                       onClick={handleAddMaterialItem}
-                      className="flex-1 bg-primary text-white py-2 rounded-xl font-bold text-sm shadow-lg shadow-primary/30"
+                      disabled={!newMatTitle.trim() || !newMatUrl || isUploadingMaterial}
+                      className="flex-1 bg-primary text-white py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-primary/30 disabled:opacity-50 transition active:scale-95 flex items-center justify-center gap-1.5"
                     >
-                      إضافة
+                      <Save size={16} />
+                      إضافة الملف
                     </button>
                   </div>
                 </div>
@@ -3313,26 +3793,49 @@ export default function App() {
       );
 
       return (
-        <div className="space-y-6 p-4">
-          <div className="flex justify-between items-center mb-6">
+        <div className="space-y-6 p-4 animate-in fade-in duration-300">
+          <div className="flex flex-wrap justify-between items-center gap-4 mb-6 bg-white dark:bg-slate-800 p-5 rounded-3xl border border-gray-100 dark:border-slate-700 shadow-sm">
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setActiveMatCourse(null)}
-                className="p-2 bg-white dark:bg-slate-800 rounded-xl shadow-sm hover:bg-gray-50 dark:hover:bg-slate-700 transition"
+                className="p-2.5 bg-gray-50 dark:bg-slate-700 rounded-2xl shadow-sm hover:bg-gray-100 dark:hover:bg-slate-600 transition"
+                title="الرجوع لقائمة المواد"
               >
                 <ChevronLeft
                   size={20}
                   className="rtl:rotate-180 text-gray-600 dark:text-gray-300"
                 />
               </button>
-              <h2 className="text-xl font-bold text-gray-800 dark:text-white">
-                {activeMatCourse.name}
-              </h2>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-gray-800 dark:text-white">
+                    {activeMatCourse.name}
+                  </h2>
+                  {isManager && (
+                    <button
+                      onClick={() => handleStartEditCourse(activeMatCourse)}
+                      className="p-1.5 bg-primary/10 hover:bg-primary/20 text-primary rounded-xl text-xs font-bold flex items-center gap-1 transition"
+                      title="تعديل اسم المادة أو اسم التدريسي"
+                    >
+                      <Edit3 size={14} />
+                      <span>تعديل المادة</span>
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 flex items-center gap-1">
+                  <UserIcon size={13} className="text-primary" />
+                  <span>التدريسي المسؤول:</span>
+                  <span className="font-bold text-gray-700 dark:text-gray-200">
+                    {activeMatCourse.professors?.join("، ") || "لم يحدد"}
+                  </span>
+                </p>
+              </div>
             </div>
+
             {isManager && (
               <button
                 onClick={() => setIsAddingSection(true)}
-                className="bg-primary text-white px-4 py-2 rounded-xl text-sm font-bold shadow-lg shadow-primary/30 hover:bg-primary/90 transition flex items-center gap-2"
+                className="bg-primary text-white px-5 py-2.5 rounded-2xl text-xs md:text-sm font-bold shadow-lg shadow-primary/30 hover:bg-primary/90 transition flex items-center gap-2"
               >
                 <FolderPlus size={18} />
                 مجلد جديد
@@ -3353,7 +3856,8 @@ export default function App() {
                       e.stopPropagation();
                       handleDeleteSection(section.id);
                     }}
-                    className="absolute top-4 left-4 text-gray-300 hover:text-red-500 transition opacity-0 group-hover:opacity-100"
+                    className="absolute top-4 left-4 text-gray-300 hover:text-red-500 transition opacity-0 group-hover:opacity-100 p-1.5 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/20"
+                    title="حذف المجلد"
                   >
                     <Trash2 size={16} />
                   </button>
@@ -3375,8 +3879,10 @@ export default function App() {
               </div>
             ))}
             {sections.length === 0 && (
-              <div className="col-span-full py-12 text-center text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-gray-100 dark:border-slate-700 border-dashed">
-                لا توجد مجلدات في هذه المادة.
+              <div className="col-span-full py-16 text-center text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-gray-100 dark:border-slate-700 border-dashed">
+                <Folder size={44} className="mx-auto mb-2 opacity-30 text-amber-500" />
+                <p className="font-bold text-gray-700 dark:text-gray-300">لا توجد مجلدات في هذه المادة بعد.</p>
+                <p className="text-xs text-gray-400 mt-1">اضغط على زر "مجلد جديد" لإضافة قسم (مثل: المحاضرات، الشيتات، الملخصات).</p>
               </div>
             )}
           </div>
@@ -3425,45 +3931,96 @@ export default function App() {
 
     // Default: List Courses
     return (
-      <div className="space-y-6 p-4">
-        <div className="bg-gradient-to-r from-amber-500 to-orange-500 rounded-3xl p-6 text-white shadow-xl shadow-amber-200 relative overflow-hidden mb-6">
+      <div className="space-y-6 p-4 animate-in fade-in duration-300">
+        <div className="bg-gradient-to-r from-amber-500 to-orange-500 rounded-3xl p-6 text-white shadow-xl shadow-amber-200 relative overflow-hidden mb-6 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
           <div className="relative z-10">
-            <h2 className="text-2xl font-bold mb-2">المحاضرات والمراجع 📚</h2>
+            <h2 className="text-2xl font-bold mb-1.5 flex items-center gap-2">
+              <BookOpen size={28} />
+              المحاضرات والمراجع الدراسية 📚
+            </h2>
             <p className="opacity-90 text-sm">
-              تصفح وحمل جميع المواد الدراسية بسهولة.
+              تصفح المحاضرات، اعرضها مباشرة داخل التطبيق أو حمّلها لجهازك بنقرة واحدة.
             </p>
           </div>
+          {isManager && (
+            <button
+              onClick={() => setIsConfiguringStorage(true)}
+              className="relative z-10 bg-white/20 hover:bg-white/30 backdrop-blur-md text-white border border-white/30 px-4 py-2.5 rounded-2xl text-xs font-bold transition flex items-center gap-2 self-start sm:self-auto shadow-sm"
+            >
+              <CloudUpload size={17} />
+              <span>إعدادات التخزين السحابي (25GB)</span>
+            </button>
+          )}
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {courses.map((course) => (
-            <div
-              key={course.id}
-              onClick={() => setActiveMatCourse(course)}
-              className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 hover:shadow-md transition cursor-pointer group"
-            >
-              <div className="flex items-center gap-4 mb-4">
-                <div className="w-12 h-12 rounded-2xl bg-orange-50 dark:bg-orange-900/20 text-orange-500 flex items-center justify-center group-hover:scale-110 transition">
-                  <BookOpen size={24} />
-                </div>
+          {courses.map((course) => {
+            const courseSections = materialSections.filter((s) => s.courseId === course.id);
+            const courseMatCount = materials.filter((m) => m.courseId === course.id).length;
+
+            return (
+              <div
+                key={course.id}
+                onClick={() => setActiveMatCourse(course)}
+                className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 hover:shadow-md transition cursor-pointer group flex flex-col justify-between"
+              >
                 <div>
-                  <h3 className="font-bold text-gray-800 dark:text-white text-lg">
-                    {course.name}
-                  </h3>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {course.code}
-                  </p>
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-2xl bg-orange-50 dark:bg-orange-900/20 text-orange-500 flex items-center justify-center group-hover:scale-110 transition shrink-0">
+                        <BookOpen size={24} />
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="font-bold text-gray-800 dark:text-white text-lg group-hover:text-primary transition truncate">
+                          {course.name}
+                        </h3>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          {course.code || "مادة دراسية"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {isManager && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartEditCourse(course);
+                        }}
+                        className="p-2 text-primary hover:bg-primary/10 bg-primary/5 rounded-xl transition flex items-center gap-1 text-xs font-bold shrink-0"
+                        title="تعديل اسم المادة أو اسم التدريسي"
+                      >
+                        <Edit3 size={15} />
+                        <span>تعديل</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Professor Name Display */}
+                  <div className="bg-gray-50 dark:bg-slate-700/50 p-2.5 rounded-2xl text-xs text-gray-600 dark:text-gray-300 mb-4 flex items-center gap-2 border border-gray-100/60 dark:border-slate-700/60">
+                    <UserIcon size={14} className="text-primary shrink-0" />
+                    <span className="font-semibold text-gray-400">التدريسي:</span>
+                    <span className="font-bold truncate text-gray-800 dark:text-gray-200">
+                      {course.professors?.length > 0 ? course.professors.join("، ") : "لم يحدد"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center text-xs font-bold text-gray-400 group-hover:text-primary pt-3 border-t border-gray-100 dark:border-slate-700/60 transition">
+                  <span>{courseSections.length} مجلدات • {courseMatCount} محاضرة</span>
+                  <div className="flex items-center gap-1">
+                    <span>فتح المادة</span>
+                    <ArrowRight size={14} className="rtl:rotate-180" />
+                  </div>
                 </div>
               </div>
-              <div className="flex justify-between items-center text-sm font-bold text-gray-400 group-hover:text-primary transition">
-                <span>تصفح الملفات</span>
-                <ArrowRight size={18} className="rtl:rotate-180" />
-              </div>
-            </div>
-          ))}
+            );
+          })}
+
           {courses.length === 0 && (
-            <div className="col-span-full py-12 text-center text-gray-400 dark:text-gray-500">
-              لا توجد مواد دراسية.
+            <div className="col-span-full py-16 text-center text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-gray-100 dark:border-slate-700 border-dashed">
+              <BookOpen size={48} className="mx-auto mb-2 opacity-30 text-primary" />
+              <p className="font-bold text-gray-700 dark:text-gray-300">لا توجد مواد دراسية مسجلة في الدفعة.</p>
+              <p className="text-xs text-gray-400 mt-1">يمكن للممثل إضافة المواد من تبويب "المواد" لتظهر المحاضرات والجدول.</p>
             </div>
           )}
         </div>
@@ -4105,26 +4662,104 @@ export default function App() {
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     onClick={() => handleStartEditCourse(course)}
-                    className="p-2 text-gray-400 hover:text-primary hover:bg-primary/5 rounded-xl transition"
-                    title="تعديل المادة"
+                    className="p-2 text-primary hover:bg-primary/10 bg-primary/5 rounded-xl transition flex items-center gap-1 text-xs font-bold"
+                    title="تعديل المادة والتدريسي"
                   >
-                    <Edit3 size={18} />
+                    <Edit3 size={16} />
+                    <span className="hidden sm:inline">تعديل</span>
                   </button>
                   <button
                     onClick={() => handleDeleteCourse(course.id)}
-                    className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition"
+                    className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 bg-red-50/50 dark:bg-red-950/30 rounded-xl transition"
                     title="حذف المادة"
                   >
-                    <Trash2 size={18} />
+                    <Trash2 size={16} />
                   </button>
                 </div>
               </div>
             ))
           )}
         </div>
+
+        {/* Edit Course Modal */}
+        {editingCourse && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-slate-800 w-full max-w-md rounded-3xl shadow-2xl p-6 animate-in zoom-in-95 border border-gray-100 dark:border-slate-700">
+              <div className="flex justify-between items-center mb-5 pb-3 border-b border-gray-100 dark:border-slate-700">
+                <div className="flex items-center gap-2">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                    <Edit3 size={20} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg text-gray-800 dark:text-white">
+                      تعديل بيانات المادة
+                    </h3>
+                    <p className="text-xs text-gray-400">
+                      تعديل اسم المادة أو اسم التدريسي المسؤول عنها
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setEditingCourse(null)}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-2 rounded-xl"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                    اسم المادة الدراسية <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={editCourseName}
+                    onChange={(e) => setEditCourseName(e.target.value)}
+                    placeholder="مثال: البرمجة الكيانية"
+                    className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 transition"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                    اسم الأستاذ / التدريسي
+                  </label>
+                  <input
+                    type="text"
+                    value={editCourseProf}
+                    onChange={(e) => setEditCourseProf(e.target.value)}
+                    placeholder="مثال: د. أحمد علي أو أ. مريم"
+                    className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 transition"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    يمكن كتابة أكثر من تدريسي بالفصل بفاصلة (،)
+                  </p>
+                </div>
+
+                <div className="flex gap-3 pt-3 border-t border-gray-100 dark:border-slate-700">
+                  <button
+                    onClick={() => setEditingCourse(null)}
+                    className="flex-1 bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 py-3 rounded-2xl font-bold text-sm hover:bg-gray-200 transition"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    onClick={handleSaveEditedCourse}
+                    disabled={!editCourseName.trim()}
+                    className="flex-1 bg-primary text-white py-3 rounded-2xl font-bold text-sm shadow-lg shadow-primary/30 flex items-center justify-center gap-2 disabled:opacity-50 transition active:scale-95"
+                  >
+                    <Save size={18} />
+                    حفظ التعديلات
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -5459,25 +6094,60 @@ export default function App() {
 
                 <div>
                   <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
-                    رابط أو مرفق خارجي (اختياري)
+                    مرفق الواجب (ملف أو صورة من الجهاز أو رابط)
                   </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={newAssignAttachmentUrl}
-                      onChange={(e) => setNewAssignAttachmentUrl(e.target.value)}
-                      placeholder="رابط ملف الواجب (Google Drive، موقع خارجي...)"
-                      className="flex-1 bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-2.5 text-xs outline-none focus:ring-2 focus:ring-primary/20 transition"
-                    />
-                    <select
-                      value={newAssignAttachmentType}
-                      onChange={(e) => setNewAssignAttachmentType(e.target.value as any)}
-                      className="bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-3 py-2.5 text-xs outline-none cursor-pointer"
-                    >
-                      <option value="link">رابط</option>
-                      <option value="file">ملف</option>
-                      <option value="image">صورة</option>
-                    </select>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="file"
+                        ref={assignFileInputRef}
+                        onChange={handleAssignFilePick}
+                        accept=".pdf,.doc,.docx,.ppt,.pptx,image/*"
+                        hidden
+                      />
+                      <button
+                        type="button"
+                        onClick={() => assignFileInputRef.current?.click()}
+                        disabled={isUploadingAssignFile}
+                        className="bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0"
+                      >
+                        {isUploadingAssignFile ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+                        اختر ملف من جهازك
+                      </button>
+
+                      <input
+                        type="text"
+                        value={newAssignAttachmentUrl.startsWith("data:") ? "(تم اختيار ملف من جهازك ✅)" : newAssignAttachmentUrl}
+                        onChange={(e) => setNewAssignAttachmentUrl(e.target.value)}
+                        disabled={newAssignAttachmentUrl.startsWith("data:")}
+                        placeholder="أو اكتب رابط خارجي (Google Drive...)"
+                        className="flex-1 bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2.5 text-xs outline-none focus:ring-2 focus:ring-primary/20 transition"
+                      />
+
+                      <select
+                        value={newAssignAttachmentType}
+                        onChange={(e) => setNewAssignAttachmentType(e.target.value as any)}
+                        disabled={newAssignAttachmentUrl.startsWith("data:")}
+                        className="bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-2.5 py-2.5 text-xs outline-none cursor-pointer"
+                      >
+                        <option value="link">رابط</option>
+                        <option value="file">ملف</option>
+                        <option value="image">صورة</option>
+                      </select>
+                    </div>
+
+                    {newAssignAttachmentUrl && newAssignAttachmentUrl.startsWith("data:") && (
+                      <div className="flex items-center justify-between text-[11px] text-emerald-600 dark:text-emerald-400 font-bold px-1">
+                        <span>تم تجهيز الملف المرفق من الجهاز للرفع مع الواجب ({newAssignAttachmentType})</span>
+                        <button
+                          type="button"
+                          onClick={() => setNewAssignAttachmentUrl("")}
+                          className="text-red-500 hover:underline"
+                        >
+                          إلغاء المرفق
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
 

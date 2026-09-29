@@ -4,6 +4,7 @@ import {
   getFirestore, doc, getDocFromServer, getDocs, getDoc, setDoc, 
   deleteDoc, collection, onSnapshot, query, orderBy, where
 } from 'firebase/firestore';
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
 import { 
   User, UserRole, Announcement, Course, Grade, 
@@ -19,7 +20,16 @@ import {
 export const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
+
+export async function uploadFileToStorage(file: File, folder = 'materials'): Promise<string> {
+  const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const path = `${folder}/${Date.now()}_${cleanName}`;
+  const fileRef = storageRef(storage, path);
+  const snapshot = await uploadBytes(fileRef, file);
+  return await getDownloadURL(snapshot.ref);
+}
 
 // Standard Error Handling for Firestore
 export enum OperationType {
