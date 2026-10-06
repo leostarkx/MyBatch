@@ -52,6 +52,10 @@ service cloud.firestore {
     match /project_groups/{id} { allow read, write: if true; }
     match /projects/{id} { allow read, write: if true; }
     match /assignments/{id} { allow read, write: if true; }
+    match /exams/{id} { allow read, write: if true; }
+    match /student_summaries/{id} { allow read, write: if true; }
+    match /batch_suggestions/{id} { allow read, write: if true; }
+    match /representative_codes/{id} { allow read, write: if true; }
     
     // --- Connection Test ---
     match /test/{id} {

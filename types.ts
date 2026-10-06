@@ -1,9 +1,9 @@
 // Role Definitions
 export enum UserRole {
   OWNER = 'OWNER',
-  ADMIN = 'ADMIN',
   STUDENT = 'STUDENT',
-  REPRESENTATIVE = 'REPRESENTATIVE'
+  REPRESENTATIVE = 'REPRESENTATIVE',
+  ASSISTANT_REP = 'ASSISTANT_REP'
 }
 
 // App Theme Colors
@@ -22,9 +22,12 @@ export interface User {
   pendingBatchCode?: string;
   avatar?: string;
   isOfficial?: boolean;
+  excludeFromStats?: boolean;
   bio?: string;
   banner?: string;
   signatureColor?: string;
+  studiedMaterialIds?: string[];
+  bookmarkedMaterialIds?: string[];
 }
 
 // Batch Instance Schema (النسخ والدفعات)
@@ -62,10 +65,24 @@ export interface Notification {
   id: string;
   userId: string;
   type: 'MENTION' | 'ANNOUNCEMENT';
+  title?: string;
   content: string;
   isRead: boolean;
   timestamp: number;
   linkTo?: string;
+}
+
+// Announcement Poll Option
+export interface AnnouncementPollOption {
+  id: string;
+  text: string;
+  votes: string[]; // Array of voter UIDs
+}
+
+// Announcement Poll Schema
+export interface AnnouncementPoll {
+  question: string;
+  options: AnnouncementPollOption[];
 }
 
 // Announcement Schema
@@ -78,6 +95,8 @@ export interface Announcement {
   authorId: string;
   authorName: string;
   priority: 'normal' | 'high';
+  isPinned?: boolean;
+  poll?: AnnouncementPoll;
   courseId?: string; // Specific course
   courseName?: string;
   mediaUrl?: string;
@@ -91,6 +110,7 @@ export interface AssessmentStructure {
   name: string;
   maxScore: number;
   date?: string;
+  category?: 'CUMULATIVE' | 'FINAL';
 }
 
 // Course Schema
@@ -100,6 +120,8 @@ export interface Course {
   name: string;
   professors: string[];
   code?: string;
+  cumulativeMaxScore?: number; // Default 50 (السعي التراكمي)
+  finalExamMaxScore?: number; // Default 50 (الامتحان النهائي الفاينال)
   assessments: AssessmentStructure[];
 }
 
@@ -131,7 +153,7 @@ export interface AttendanceRecord {
   batchCode: string; // SCOPED
   sessionId: string;
   studentId: string;
-  status: 'PRESENT' | 'ABSENT';
+  status: 'PRESENT' | 'ABSENT' | 'EXCUSED';
   timestamp?: number;
 }
 
@@ -141,7 +163,8 @@ export interface MaterialSection {
   batchCode: string; // SCOPED
   courseId: string;
   title: string;
-  icon?: 'FOLDER' | 'BOOK' | 'FLASK'; 
+  icon?: 'FOLDER' | 'BOOK' | 'FLASK' | 'ARCHIVE';
+  category?: 'LECTURES' | 'QUESTIONS_BANK';
 }
 
 // Material
@@ -154,6 +177,11 @@ export interface Material {
   type: 'PDF' | 'IMAGE' | 'LINK';
   url: string;
   uploadDate: string;
+  fileName?: string;
+  driveFileId?: string;
+  driveViewUrl?: string;
+  driveDownloadUrl?: string;
+  fileSize?: string;
 }
 
 // Chat Schema
@@ -184,6 +212,7 @@ export enum Tab {
   GRADES = 'درجاتي',
   ATTENDANCE = 'الحضور',
   MATERIALS = 'المحاضرات',
+  SUMMARIES = 'الملخصات',
   CHAT = 'الدفعة',
   PROFILE = 'حسابي',
   STUDENTS = 'الطلاب',
@@ -191,7 +220,75 @@ export enum Tab {
   REQUESTS = 'طلبات الانضمام',
   COURSES = 'المواد الدراسية',
   PROJECTS = 'المشاريع',
-  ASSIGNMENTS = 'الواجبات'
+  ASSIGNMENTS = 'الواجبات',
+  LEADERBOARD = 'المتصدرين',
+  SUGGESTIONS = 'صندوق الدفعة'
+}
+
+export type SuggestionCategory =
+  | 'SUGGESTION' // مقترح تطويري
+  | 'REQUEST' // طلب تأجيل / تنسيق
+  | 'ISSUE' // مشكلة في القاعة / المحاضرة
+  | 'QUESTION'; // استفسار عام للممثل
+
+export type SuggestionStatus =
+  | 'OPEN' // مفتوح للتصويت
+  | 'ANSWERED' // تمت الإجابة من الممثل
+  | 'APPROVED' // تمت الموافقة والتنفيذ
+  | 'CONVERTED'; // تم تحويله لتبليغ عام
+
+export interface BatchSuggestion {
+  id: string;
+  batchCode: string;
+  courseId?: string;
+  courseName?: string;
+  category: SuggestionCategory;
+  title: string;
+  content: string;
+  isAnonymous: boolean; // إرسال بدون اسم (مجهول الهوية)
+  authorUid: string;
+  authorName: string;
+  authorAvatar?: string;
+  upvotes: string[]; // معرّفات الطلاب المؤيدين 👍
+  downvotes: string[]; // معرّفات الطلاب المعارضين 👎
+  status: SuggestionStatus;
+  repReply?: string; // رد الممثل
+  repReplyBy?: string;
+  repReplyAt?: number;
+  createdAt: number;
+}
+
+export type SummaryCategory =
+  | 'SUMMARY' // ملخص محاضرة / فصل
+  | 'NOTES' // ملاحظات مهمة وتأشيرات
+  | 'PAST_QUESTIONS' // أسئلة وحلول
+  | 'MINDMAP' // مخططات وجداول وقوانين
+  | 'EXAM_REVIEW'; // مراجعة مركزة للامتحان
+
+export interface SummaryAttachment {
+  id: string;
+  fileName: string;
+  url: string;
+  fileSize?: string;
+  mimeType?: string;
+}
+
+export interface StudentSummary {
+  id: string;
+  batchCode: string;
+  courseId: string;
+  courseName: string;
+  category: SummaryCategory;
+  title: string;
+  content?: string; // النص أو الملاحظة المكتوبة (اختياري إذا وُجد مرفق، أو كلاهما معاً)
+  attachments?: SummaryAttachment[]; // ملفات بأي صيغة كانت
+  authorUid: string;
+  authorName: string;
+  authorAvatar?: string;
+  authorRole?: UserRole;
+  likes?: string[]; // UIDs of students who found it helpful
+  isPinned?: boolean;
+  createdAt: number;
 }
 
 // Join Request Schema
@@ -206,6 +303,19 @@ export interface JoinRequest {
   timestamp: number;
 }
 
+// Project File / Submission Item Schema
+export interface ProjectFileItem {
+  id: string;
+  title: string;
+  fileName: string;
+  url: string;
+  fileSize?: string;
+  uploadedByUid: string;
+  uploadedByName: string;
+  uploadedAt: number;
+  type?: 'PDF' | 'IMAGE' | 'LINK' | 'file';
+}
+
 // Project Group Item Schema (Inside a Project)
 export interface ProjectGroupItem {
   id: string;
@@ -214,6 +324,11 @@ export interface ProjectGroupItem {
   members: string[]; // User UIDs
   leaderId?: string;
   createdAt: number;
+  files?: ProjectFileItem[]; // قائمة ملفات الكروب المرفوعة من الطلاب أو الممثل
+  submissionUrl?: string;
+  submissionName?: string;
+  submissionDate?: string;
+  driveFileId?: string;
 }
 
 // Course Project Schema
@@ -226,6 +341,7 @@ export interface CourseProject {
   description?: string;
   deadline?: string;
   groups: ProjectGroupItem[];
+  projectFiles?: ProjectFileItem[]; // ملفات عامة للمشروع أو الحدث يرفعها الممثل
   createdAt: number;
   createdBy?: string;
 }
@@ -263,4 +379,39 @@ export interface Assignment {
   completedBy?: string[]; // معرّفات الطلاب الذين أتمّوا الواجب
   createdAt: number;
   createdBy?: string;
+}
+
+// Exam & Quiz Schema (الامتحانات والكويزات)
+export interface Exam {
+  id: string;
+  batchCode: string; // SCOPED
+  title: string; // e.g. "كويز فصلي 1" أو "امتحان الشهر الأول" أو "الامتحان النهائي"
+  courseId: string;
+  courseName: string;
+  examDate: string; // e.g. "2026-10-12T09:00"
+  examTimestamp: number;
+  hall?: string; // القاعة الامتحانية
+  topics?: string; // المادة المقررة للامتحان
+  type?: 'QUIZ' | 'MIDTERM' | 'FINAL' | 'PRACTICAL';
+  createdAt: number;
+  createdBy?: string;
+}
+
+// Representative Activation / Appointment Code Schema
+export interface RepresentativeCode {
+  id: string;
+  code: string; // e.g. "REP-ENG26-9281"
+  batchCode: string;
+  batchName?: string;
+  targetRepName?: string; // اسم الممثل المحدد
+  targetRepUsername?: string; // يوزر الممثل إن وجد
+  durationOption?: 'month' | 'year' | 'lifetime'; // مدة الكود: شهر أو سنة أو مدى الحياة
+  createdBy: string;
+  createdAt: number;
+  expiresAt?: number;
+  isUsed: boolean;
+  usedByUid?: string;
+  usedByName?: string;
+  usedAt?: number;
+  notes?: string;
 }

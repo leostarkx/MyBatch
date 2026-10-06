@@ -81,7 +81,9 @@
       "properties": {
         "id": { "type": "string" },
         "chatLocked": { "type": "boolean" },
-        "lockNotice": { "type": "string" }
+        "lockNotice": { "type": "string" },
+        "cloudinaryCloudName": { "type": "string" },
+        "cloudinaryUploadPreset": { "type": "string" }
       },
       "required": ["id"]
     },

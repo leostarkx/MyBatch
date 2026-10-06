@@ -1,6 +1,7 @@
 import React from 'react';
 import { Tab, UserRole, User } from '../types';
-import { Home, BookOpen, GraduationCap, MessageSquare, User as UserIcon, LogOut, Users, CalendarCheck, UserPlus, Layers, CheckSquare } from 'lucide-react';
+import { Home, BookOpen, GraduationCap, MessageSquare, User as UserIcon, LogOut, Users, CalendarCheck, UserPlus, Layers, CheckSquare, Crown, Trophy, FileText, Inbox } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -8,18 +9,33 @@ interface LayoutProps {
   onTabChange: (tab: Tab) => void;
   user: User | null;
   onLogout: () => void;
+  onOpenDriveModal?: () => void;
+  onOpenRepModal?: () => void;
+  joinRequestsCount?: number;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user, onLogout }) => {
+const Layout: React.FC<LayoutProps> = ({
+  children,
+  activeTab,
+  onTabChange,
+  user,
+  onLogout,
+  onOpenDriveModal,
+  onOpenRepModal,
+  joinRequestsCount = 0,
+}) => {
   if (!user) return <>{children}</>;
 
   let navItems = [
     { id: Tab.HOME, icon: Home, label: 'الرئيسية' },
+    { id: Tab.LEADERBOARD, icon: Trophy, label: 'المتصدرين 🏆' },
     { id: Tab.ASSIGNMENTS, icon: CheckSquare, label: 'الواجبات' },
     { id: Tab.SCHEDULE, icon: CalendarCheck, label: 'الجدول' },
     { id: Tab.GRADES, icon: GraduationCap, label: 'الدرجات' },
     { id: Tab.ATTENDANCE, icon: CalendarCheck, label: 'الحضور' },
     { id: Tab.MATERIALS, icon: BookOpen, label: 'المحاضرات' },
+    { id: Tab.SUMMARIES, icon: FileText, label: 'الملخصات 📝' },
+    { id: Tab.SUGGESTIONS, icon: Inbox, label: 'صندوق الدفعة 📬' },
     { id: Tab.PROJECTS, icon: Layers, label: 'المشاريع' },
     { id: Tab.CHAT, icon: MessageSquare, label: 'الدفعة' },
     { id: Tab.PROFILE, icon: UserIcon, label: 'حسابي' },
@@ -32,20 +48,16 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user,
       { id: Tab.PROFILE, icon: UserIcon, label: 'حسابي' },
     ];
   } else {
-    // Manager tabs
-    if (user.role === UserRole.REPRESENTATIVE || user.role === UserRole.ADMIN || user.role === UserRole.OWNER) {
+    // Representative & Owner tabs
+    if (user.role === UserRole.REPRESENTATIVE || user.role === UserRole.OWNER) {
       navItems.splice(6, 0, { id: Tab.STUDENTS, icon: Users, label: 'إدارة الطلاب' });
       navItems.splice(7, 0, { id: Tab.COURSES, icon: BookOpen, label: 'المواد' });
-    }
-    
-    // Representative and Owner specific tabs
-    if (user.role === UserRole.REPRESENTATIVE || user.role === UserRole.OWNER) {
       navItems.splice(8, 0, { id: Tab.REQUESTS, icon: UserPlus, label: 'الطلبات' });
+    } else if (user.role === UserRole.ASSISTANT_REP) {
+      navItems.splice(7, 0, { id: Tab.COURSES, icon: BookOpen, label: 'المواد' });
     }
-
-    // Owner specific tabs
     if (user.role === UserRole.OWNER) {
-      navItems.push({ id: Tab.BATCHES, icon: BookOpen, label: 'نسخ الدفعات' });
+      navItems.splice(9, 0, { id: Tab.BATCHES, icon: Layers, label: 'النسخ والدفعات' });
     }
   }
 
@@ -70,23 +82,63 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user,
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
+            const isRequestsTab = item.id === Tab.REQUESTS;
+            const hasRequests = isRequestsTab && joinRequestsCount > 0;
+
             return (
               <button
                 key={item.id}
                 onClick={() => onTabChange(item.id)}
-                className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200 group ${
+                className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200 group relative ${
                   isActive 
                     ? 'bg-primary text-white shadow-md shadow-primary/30' 
                     : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-slate-700 hover:text-primary dark:hover:text-white'
                 }`}
               >
-                <Icon size={22} className={isActive ? 'text-white' : 'text-gray-400 dark:text-gray-500 group-hover:text-primary dark:group-hover:text-white'} />
+                <div className="relative">
+                  <Icon size={22} className={isActive ? 'text-white' : 'text-gray-400 dark:text-gray-500 group-hover:text-primary dark:group-hover:text-white'} />
+                  {hasRequests && (
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-ping" />
+                  )}
+                </div>
                 <span className="font-semibold">{item.label}</span>
-                {isActive && <div className="mr-auto w-1.5 h-1.5 rounded-full bg-white/50" />}
+                {hasRequests && (
+                  <span className="mr-auto px-2 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white shadow-sm animate-pulse">
+                    {joinRequestsCount}
+                  </span>
+                )}
+                {isActive && !hasRequests && <div className="mr-auto w-1.5 h-1.5 rounded-full bg-white/50" />}
               </button>
             );
           })}
         </nav>
+
+        {onOpenRepModal && (
+          <div className="px-4 pb-2">
+            <button
+              onClick={onOpenRepModal}
+              className="w-full flex items-center justify-between p-3 rounded-2xl bg-gradient-to-r from-amber-500/10 to-orange-500/10 hover:from-amber-500/20 hover:to-orange-500/20 border border-amber-200 dark:border-amber-900/40 text-amber-800 dark:text-amber-300 transition-all duration-200 group text-right shadow-sm"
+              title="إدارة وتعيين الممثلين وتوليد الأكواد"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center shadow-md shadow-orange-500/20 group-hover:scale-105 transition-transform shrink-0">
+                  <Crown size={18} />
+                </div>
+                <div>
+                  <span className="text-xs font-bold block">إدارة الممثلين</span>
+                  <span className="text-[10px] text-amber-700/80 dark:text-amber-400 block font-medium">أكواد وتعيين ونقل</span>
+                </div>
+              </div>
+              <span className="text-[10px] font-bold bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200 px-2 py-0.5 rounded-full">
+                👑
+              </span>
+            </button>
+          </div>
+        )}
+
+        <div className="px-4 pb-2">
+          <PWAInstallButton />
+        </div>
 
         <div className="p-4 border-t border-gray-100 dark:border-slate-700">
           <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 dark:bg-slate-700/50 border border-gray-100 dark:border-slate-700">
@@ -94,7 +146,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user,
             <div className="flex-1 min-w-0">
               <p className="text-sm font-bold text-gray-800 dark:text-white truncate">{user.name}</p>
               <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                {user.role === UserRole.OWNER ? 'المطور الرئيسي (المالك)' : user.role === UserRole.ADMIN ? 'مشرف النظام' : user.role === UserRole.REPRESENTATIVE ? 'ممثل الدفعة' : 'طالب'}
+                {user.role === UserRole.OWNER ? 'المطور 💻' : user.role === UserRole.REPRESENTATIVE ? 'ممثل الدفعة 👑' : user.role === UserRole.ASSISTANT_REP ? 'ممثل معاون 🎖️' : 'طالب'}
               </p>
             </div>
             <button onClick={onLogout} className="text-gray-400 hover:text-red-500 transition">
@@ -116,6 +168,19 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user,
              />
              <span className="font-bold text-lg">دفعتي</span>
           </div>
+          <div className="flex items-center gap-1.5">
+            <PWAInstallButton compact />
+            {onOpenRepModal && (
+              <button
+                onClick={onOpenRepModal}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 text-xs font-bold border border-amber-200 dark:border-amber-800/40 hover:bg-amber-100 transition shadow-sm"
+                title="إدارة وتعيين الممثلين"
+              >
+                <Crown size={15} className="text-amber-500" />
+                <span>الممثلين</span>
+              </button>
+            )}
+          </div>
         </header>
 
         {/* Scrollable Content Area */}
@@ -130,6 +195,9 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user,
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
+            const isRequestsTab = item.id === Tab.REQUESTS;
+            const hasRequests = isRequestsTab && joinRequestsCount > 0;
+
             return (
               <button
                 key={item.id}
@@ -138,8 +206,13 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, user,
                   isActive ? 'text-primary -translate-y-1' : 'text-gray-400 dark:text-gray-500'
                 }`}
               >
-                <div className={`p-1.5 rounded-xl transition-all ${isActive ? 'bg-primary/10' : ''}`}>
+                <div className={`p-1.5 rounded-xl transition-all relative ${isActive ? 'bg-primary/10' : ''}`}>
                     <Icon size={22} strokeWidth={isActive ? 2.5 : 2} />
+                    {hasRequests && (
+                      <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full text-[9px] font-black flex items-center justify-center border-2 border-white dark:border-slate-800 animate-pulse">
+                        {joinRequestsCount > 9 ? '+9' : joinRequestsCount}
+                      </span>
+                    )}
                 </div>
                 <span className={`text-[10px] mt-0.5 font-medium whitespace-nowrap transition-opacity ${isActive ? 'opacity-100 font-bold' : 'opacity-70'}`}>{item.label}</span>
                 {isActive && <span className="absolute bottom-0 w-1 h-1 bg-primary rounded-full"></span>}
