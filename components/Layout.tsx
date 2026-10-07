@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Tab, UserRole, User } from '../types';
-import { Home, BookOpen, GraduationCap, MessageSquare, User as UserIcon, LogOut, Users, CalendarCheck, UserPlus, Layers, CheckSquare, Crown, Trophy, FileText, Inbox } from 'lucide-react';
+import { Home, BookOpen, GraduationCap, MessageSquare, User as UserIcon, LogOut, Users, CalendarCheck, UserPlus, Layers, CheckSquare, Crown, Trophy, FileText, Inbox, Phone, Send, Instagram, X, Copy, Check, ExternalLink } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
+import { BatchLogo } from './BatchLogo';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -24,6 +25,15 @@ const Layout: React.FC<LayoutProps> = ({
   onOpenRepModal,
   joinRequestsCount = 0,
 }) => {
+  const [isDevContactOpen, setIsDevContactOpen] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  const handleCopyContact = (value: string, key: string) => {
+    navigator.clipboard.writeText(value);
+    setCopiedField(key);
+    setTimeout(() => setCopiedField(null), 1800);
+  };
+
   if (!user) return <>{children}</>;
 
   let navItems = [
@@ -67,14 +77,22 @@ const Layout: React.FC<LayoutProps> = ({
       {/* Desktop Sidebar */}
       <aside className="hidden md:flex w-72 bg-white dark:bg-slate-800 border-l border-gray-200 dark:border-slate-700 flex-col shadow-lg z-20 transition-colors duration-300">
         <div className="p-6 border-b border-gray-100 dark:border-slate-700 flex items-center gap-3">
-          <img 
-            src="https://image2url.com/r2/default/images/1771267640581-35bff80f-1346-49cc-bf93-a392d06b2588.png" 
-            alt="Logo" 
-            className="w-10 h-10 object-contain hover:scale-110 transition-transform duration-300"
+          <BatchLogo
+            className="w-11 h-11 hover:scale-110 transition-transform duration-300"
+            showBackground
           />
           <div>
             <h1 className="text-xl font-bold text-gray-800 dark:text-white">دفعتي</h1>
-            <p className="text-xs text-gray-500 dark:text-gray-400">تطبيق الدفعة الموحد</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              تم التطوير بواسطة{" "}
+              <button
+                type="button"
+                onClick={() => setIsDevContactOpen(true)}
+                className="font-bold text-primary hover:underline cursor-pointer transition"
+              >
+                "أحمد عامر"
+              </button>
+            </p>
           </div>
         </div>
 
@@ -161,12 +179,20 @@ const Layout: React.FC<LayoutProps> = ({
         {/* Mobile Header */}
         <header className="md:hidden bg-white dark:bg-slate-800 text-gray-800 dark:text-white p-4 shadow-sm z-20 flex justify-between items-center sticky top-0 transition-colors duration-300">
           <div className="flex items-center gap-2">
-             <img 
-               src="https://image2url.com/r2/default/images/1771267640581-35bff80f-1346-49cc-bf93-a392d06b2588.png" 
-               alt="Logo" 
-               className="w-8 h-8 object-contain"
-             />
-             <span className="font-bold text-lg">دفعتي</span>
+             <BatchLogo className="w-9 h-9" showBackground />
+             <div>
+               <span className="font-bold text-base block leading-tight">دفعتي</span>
+               <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                 تم التطوير بواسطة{" "}
+                 <button
+                   type="button"
+                   onClick={() => setIsDevContactOpen(true)}
+                   className="font-bold text-primary hover:underline cursor-pointer"
+                 >
+                   "أحمد عامر"
+                 </button>
+               </p>
+             </div>
           </div>
           <div className="flex items-center gap-1.5">
             <PWAInstallButton compact />
@@ -221,6 +247,160 @@ const Layout: React.FC<LayoutProps> = ({
           })}
         </nav>
       </div>
+
+      {/* Developer Contact Modal ("أحمد عامر") */}
+      {isDevContactOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setIsDevContactOpen(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-800 w-full max-w-sm rounded-3xl shadow-2xl border border-gray-100 dark:border-slate-700 p-6 space-y-5 animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-gray-100 dark:border-slate-700 pb-4">
+              <div className="flex items-center gap-3">
+                <BatchLogo className="w-12 h-12" showBackground />
+                <div>
+                  <span className="text-[10px] font-bold text-primary bg-primary/10 px-2.5 py-0.5 rounded-full inline-block mb-0.5">
+                    مطور المنصة 💻
+                  </span>
+                  <h3 className="text-lg font-black text-gray-800 dark:text-white">
+                    أحمد عامر
+                  </h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDevContactOpen(false)}
+                className="p-2 rounded-xl bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-gray-300 hover:bg-gray-200 transition"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Contact Links */}
+            <div className="space-y-2.5" dir="ltr">
+              {/* Phone / WhatsApp */}
+              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-800/50">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+                    <Phone size={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 block">
+                      Phone / WhatsApp
+                    </span>
+                    <span className="text-sm font-black text-gray-800 dark:text-white font-mono">
+                      07866330605
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleCopyContact('07866330605', 'phone')}
+                    className="p-2 rounded-xl bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 hover:text-emerald-600 border border-emerald-200 dark:border-slate-700 transition"
+                    title="نسخ الرقم"
+                  >
+                    {copiedField === 'phone' ? <Check size={15} className="text-emerald-600" /> : <Copy size={15} />}
+                  </button>
+                  <a
+                    href="https://wa.me/9647866330605"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white transition shadow-xs"
+                    title="مراسلة عبر واتساب"
+                  >
+                    <ExternalLink size={15} />
+                  </a>
+                </div>
+              </div>
+
+              {/* Instagram */}
+              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-pink-50/70 dark:bg-pink-950/30 border border-pink-200/70 dark:border-pink-800/50">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 via-pink-500 to-purple-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                    <Instagram size={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[11px] font-bold text-pink-700 dark:text-pink-400 block">
+                      Instagram
+                    </span>
+                    <span className="text-sm font-black text-gray-800 dark:text-white font-mono">
+                      @yicn
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleCopyContact('yicn', 'insta')}
+                    className="p-2 rounded-xl bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 hover:text-pink-600 border border-pink-200 dark:border-slate-700 transition"
+                    title="نسخ اليوزر"
+                  >
+                    {copiedField === 'insta' ? <Check size={15} className="text-emerald-600" /> : <Copy size={15} />}
+                  </button>
+                  <a
+                    href="https://instagram.com/yicn"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 rounded-xl bg-pink-600 hover:bg-pink-700 text-white transition shadow-xs"
+                    title="فتح حساب إنستغرام"
+                  >
+                    <ExternalLink size={15} />
+                  </a>
+                </div>
+              </div>
+
+              {/* Telegram */}
+              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-sky-50/70 dark:bg-sky-950/30 border border-sky-200/70 dark:border-sky-800/50">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-xl bg-sky-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+                    <Send size={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[11px] font-bold text-sky-700 dark:text-sky-400 block">
+                      Telegram
+                    </span>
+                    <span className="text-sm font-black text-gray-800 dark:text-white font-mono">
+                      @xwebj
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleCopyContact('xwebj', 'tg')}
+                    className="p-2 rounded-xl bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 hover:text-sky-600 border border-sky-200 dark:border-slate-700 transition"
+                    title="نسخ اليوزر"
+                  >
+                    {copiedField === 'tg' ? <Check size={15} className="text-emerald-600" /> : <Copy size={15} />}
+                  </button>
+                  <a
+                    href="https://t.me/xwebj"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 rounded-xl bg-sky-500 hover:bg-sky-600 text-white transition shadow-xs"
+                    title="مراسلة عبر تيليجرام"
+                  >
+                    <ExternalLink size={15} />
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsDevContactOpen(false)}
+              className="w-full py-2.5 rounded-2xl bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 text-gray-700 dark:text-gray-200 font-bold text-xs transition"
+            >
+              إغلاق
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

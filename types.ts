@@ -55,6 +55,8 @@ export interface LectureSchedule {
   startTime: string;
   endTime: string;
   hall: string;
+  lectureType?: 'THEORY' | 'PRACTICAL'; // نظري أو عملي/مختبر
+  isWeekly?: boolean; // يتكرر كل أسبوع تلقائياً
   isCancelled?: boolean;
   note?: string;
   updatedAt?: number;

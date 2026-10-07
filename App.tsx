@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import Layout from "./components/Layout";
+import { BatchLogo } from "./components/BatchLogo";
 import { StudentAttendanceReportModal } from "./components/StudentAttendanceReportModal";
 import { BatchLeaderboard } from "./components/BatchLeaderboard";
 import { StudentSummariesHub } from "./components/StudentSummariesHub";
@@ -386,12 +387,11 @@ const AuthScreen: React.FC<AuthScreenProps> = ({
 
       <div className="bg-white/80 dark:bg-slate-800/90 backdrop-blur-xl rounded-3xl shadow-2xl p-8 w-full max-w-sm z-10 border border-white/50 dark:border-slate-700 animate-in zoom-in-95 duration-500">
         <div className="text-center mb-8">
-          <div className="w-24 h-24 mx-auto mb-4 relative">
+          <div className="w-24 h-24 mx-auto mb-4 relative flex items-center justify-center">
             <div className="absolute inset-0 bg-primary/20 rounded-full blur-xl animate-pulse"></div>
-            <img
-              src="https://image2url.com/r2/default/images/1771267640581-35bff80f-1346-49cc-bf93-a392d06b2588.png"
-              alt="App Logo"
-              className="w-full h-full object-contain relative z-10 drop-shadow-xl hover:scale-105 transition-transform duration-300"
+            <BatchLogo
+              className="w-24 h-24 relative z-10 drop-shadow-xl hover:scale-105 transition-transform duration-300"
+              showBackground
             />
           </div>
           <h1 className="text-2xl font-bold text-gray-800 dark:text-white mb-1">
@@ -676,6 +676,7 @@ export default function App() {
   // Schedule Management State (Representative & Admin & Owner)
   const [isAddingSchedule, setIsAddingSchedule] = useState(false);
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
+  const [schedCourseId, setSchedCourseId] = useState("");
   const [schedCourseName, setSchedCourseName] = useState("");
   const [schedProf, setSchedProf] = useState("");
   const [schedDay, setSchedDay] = useState("الأحد");
@@ -683,8 +684,11 @@ export default function App() {
   const [schedStartTime, setSchedStartTime] = useState("08:30 ص");
   const [schedEndTime, setSchedEndTime] = useState("10:30 ص");
   const [schedHall, setSchedHall] = useState("");
+  const [schedLectureType, setSchedLectureType] = useState<"THEORY" | "PRACTICAL">("THEORY");
+  const [schedIsWeekly, setSchedIsWeekly] = useState(true);
   const [schedNote, setSchedNote] = useState("");
   const [schedFilterDay, setSchedFilterDay] = useState("الكل");
+  const [scheduleViewMode, setScheduleViewMode] = useState<"WEEKLY_GRID" | "CARDS">("WEEKLY_GRID");
 
   // --- UI States ---
   // Material Navigation State
@@ -1343,25 +1347,60 @@ export default function App() {
   };
 
   // --- Dynamic Lecture Schedule Logic ---
+  const handleOpenAddScheduleModal = (preselectedDay?: string) => {
+    setEditingScheduleId(null);
+    const defaultCourse = courses[0] || null;
+    setSchedCourseId(defaultCourse ? defaultCourse.id : "");
+    setSchedCourseName(defaultCourse ? defaultCourse.name : "");
+    setSchedProf(
+      defaultCourse && defaultCourse.professors?.length > 0 && defaultCourse.professors[0] !== "غير محدد"
+        ? defaultCourse.professors.join("، ")
+        : ""
+    );
+    setSchedDay(preselectedDay && preselectedDay !== "الكل" ? preselectedDay : "الأحد");
+    setSchedDate("");
+    setSchedStartTime("08:30 ص");
+    setSchedEndTime("10:30 ص");
+    setSchedHall("");
+    setSchedLectureType("THEORY");
+    setSchedIsWeekly(true);
+    setSchedNote("");
+    setIsAddingSchedule(true);
+  };
+
   const handleSaveSchedule = async () => {
-    if (!schedCourseName || !schedDay || !schedStartTime || !schedEndTime) return;
+    const selectedCourseObj = courses.find((c) => c.id === schedCourseId);
+    const resolvedCourseName = (selectedCourseObj?.name || schedCourseName).trim();
+    if (!resolvedCourseName || !schedDay || !schedStartTime) {
+      alert("يرجى اختيار المادة وتحديد اليوم ووقت بدء المحاضرة");
+      return;
+    }
+
     const scheduleItem: LectureSchedule = {
       id: editingScheduleId || `sch_${Date.now()}`,
       batchCode: effectiveBatchCode,
-      courseName: schedCourseName,
-      professor: schedProf || "",
+      courseId: selectedCourseObj?.id || schedCourseId || undefined,
+      courseName: resolvedCourseName,
+      professor:
+        schedProf.trim() ||
+        (selectedCourseObj?.professors?.length && selectedCourseObj.professors[0] !== "غير محدد"
+          ? selectedCourseObj.professors.join("، ")
+          : ""),
       day: schedDay,
-      date: schedDate || "",
-      startTime: schedStartTime,
-      endTime: schedEndTime,
-      hall: schedHall || "قاعة عامة",
+      date: schedIsWeekly ? "" : schedDate || "",
+      startTime: schedStartTime.trim(),
+      endTime: schedEndTime.trim() || "",
+      hall: schedHall.trim() || "قاعة عامة",
+      lectureType: schedLectureType,
+      isWeekly: schedIsWeekly,
       isCancelled: false,
-      note: schedNote || "",
-      updatedAt: Date.now()
+      note: schedNote.trim() || "",
+      updatedAt: Date.now(),
     };
     await saveScheduleToFirestore(scheduleItem);
     setIsAddingSchedule(false);
     setEditingScheduleId(null);
+    setSchedCourseId("");
     setSchedCourseName("");
     setSchedProf("");
     setSchedDay("الأحد");
@@ -1369,6 +1408,8 @@ export default function App() {
     setSchedStartTime("08:30 ص");
     setSchedEndTime("10:30 ص");
     setSchedHall("");
+    setSchedLectureType("THEORY");
+    setSchedIsWeekly(true);
     setSchedNote("");
   };
 
@@ -7430,310 +7471,897 @@ export default function App() {
 
   // --- Dynamic Lecture Schedule View ---
   const renderSchedule = () => {
-    const days = ["الكل", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "السبت"];
-    const filteredSchedules = schedFilterDay === "الكل" 
-      ? schedules 
-      : schedules.filter(s => s.day === schedFilterDay);
+    const weekDays = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "السبت"];
+    const filterDays = ["الكل", ...weekDays];
+
+    // Convert Arabic/24h time string to minutes from midnight for chronological sorting
+    const parseTimeToMinutes = (timeStr: string): number => {
+      if (!timeStr) return 9999;
+      const clean = timeStr.trim();
+      const isPM = clean.includes("م") || clean.toLowerCase().includes("pm");
+      const isAM = clean.includes("ص") || clean.toLowerCase().includes("am");
+      const match = clean.match(/(\d{1,2}):(\d{2})/);
+      if (!match) return 9999;
+      let hours = parseInt(match[1], 10);
+      const mins = parseInt(match[2], 10);
+      if (isPM && hours < 12) hours += 12;
+      if (isAM && hours === 12) hours = 0;
+      // For typical university hours like "01:30" without AM/PM, if between 1 and 6 assume PM
+      if (!isPM && !isAM && hours >= 1 && hours <= 6) hours += 12;
+      return hours * 60 + mins;
+    };
+
+    // Convert 24h input ("08:30" or "13:30") to friendly Arabic time ("08:30 ص" or "01:30 م")
+    const format24hToArabic = (val24: string): string => {
+      if (!val24 || !val24.includes(":")) return val24;
+      const [hStr, mStr] = val24.split(":");
+      let h = parseInt(hStr, 10);
+      if (isNaN(h)) return val24;
+      const suffix = h >= 12 ? "م" : "ص";
+      if (h > 12) h -= 12;
+      if (h === 0) h = 12;
+      return `${String(h).padStart(2, "0")}:${mStr} ${suffix}`;
+    };
+
+    // Convert Arabic time string ("08:30 ص") back to "08:30" for <input type="time">
+    const arabicTimeTo24h = (arabicTime: string): string => {
+      if (!arabicTime) return "08:30";
+      const match = arabicTime.match(/(\d{1,2}):(\d{2})/);
+      if (!match) return "08:30";
+      let h = parseInt(match[1], 10);
+      const m = match[2];
+      const isPM = arabicTime.includes("م") || arabicTime.toLowerCase().includes("pm");
+      const isAM = arabicTime.includes("ص") || arabicTime.toLowerCase().includes("am");
+      if (isPM && h < 12) h += 12;
+      if (isAM && h === 12) h = 0;
+      return `${String(h).padStart(2, "0")}:${m}`;
+    };
+
+    const currentArabicDay = (() => {
+      const jsDay = new Date().getDay(); // 0 = Sun, 1 = Mon, ... 6 = Sat
+      const map: Record<number, string> = {
+        0: "الأحد",
+        1: "الاثنين",
+        2: "الثلاثاء",
+        3: "الأربعاء",
+        4: "الخميس",
+        5: "الجمعة",
+        6: "السبت",
+      };
+      return map[jsDay] || "الأحد";
+    })();
+
+    const sortedSchedules = [...schedules].sort(
+      (a, b) => parseTimeToMinutes(a.startTime) - parseTimeToMinutes(b.startTime)
+    );
+
+    const filteredSchedules =
+      schedFilterDay === "الكل"
+        ? sortedSchedules
+        : sortedSchedules.filter((s) => s.day === schedFilterDay);
+
+    const quickStartTimes = [
+      "08:00 ص",
+      "08:30 ص",
+      "09:00 ص",
+      "09:30 ص",
+      "10:00 ص",
+      "10:30 ص",
+      "11:00 ص",
+      "11:30 ص",
+      "12:00 م",
+      "12:30 م",
+      "01:00 م",
+      "01:30 م",
+    ];
+
+    const quickEndTimes = [
+      "09:30 ص",
+      "10:00 ص",
+      "10:30 ص",
+      "11:00 ص",
+      "11:30 ص",
+      "12:00 م",
+      "12:30 م",
+      "01:00 م",
+      "01:30 م",
+      "02:00 م",
+      "02:30 م",
+    ];
+
+    const openEditScheduleModal = (item: LectureSchedule) => {
+      setEditingScheduleId(item.id);
+      const matchedCourse = courses.find(
+        (c) => c.id === item.courseId || c.name === item.courseName
+      );
+      setSchedCourseId(matchedCourse ? matchedCourse.id : "__custom__");
+      setSchedCourseName(item.courseName);
+      setSchedProf(item.professor || "");
+      setSchedDay(item.day);
+      setSchedDate(item.date || "");
+      setSchedStartTime(item.startTime || "08:30 ص");
+      setSchedEndTime(item.endTime || "10:30 ص");
+      setSchedHall(item.hall || "");
+      setSchedLectureType(item.lectureType || "THEORY");
+      setSchedIsWeekly(item.isWeekly !== false);
+      setSchedNote(item.note || "");
+      setIsAddingSchedule(true);
+    };
 
     return (
-      <div className="space-y-6 p-4">
+      <div className="space-y-6 p-4 pb-20 animate-in fade-in duration-300">
         {/* Header Banner */}
-        <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-3xl p-6 text-white shadow-xl shadow-blue-200 dark:shadow-none relative overflow-hidden">
+        <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-700 rounded-3xl p-6 text-white shadow-xl shadow-blue-200/50 dark:shadow-none relative overflow-hidden">
           <div className="relative z-10 flex flex-col md:flex-row justify-between md:items-center gap-4">
             <div>
-              <div className="inline-flex items-center gap-1.5 bg-white/20 text-white text-xs px-3 py-1 rounded-full font-bold mb-2">
-                <CalendarCheck size={14} />
-                جدول ومواعيد المحاضرات
+              <div className="flex flex-wrap items-center gap-2 mb-2">
+                <span className="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-md text-white text-xs px-3 py-1 rounded-full font-bold">
+                  <CalendarCheck size={14} />
+                  يتكرر تلقائياً كل أسبوع 🔄
+                </span>
+                <span className="inline-flex items-center gap-1.5 bg-emerald-400/20 border border-emerald-300/30 text-emerald-100 text-xs px-3 py-1 rounded-full font-bold">
+                  اليوم: {currentArabicDay}
+                </span>
               </div>
-              <h2 className="text-2xl font-bold mb-1">
-                الجدول الدراسي الديناميكي 🗓️
+              <h2 className="text-2xl md:text-3xl font-black mb-1">
+                الجدول الأسبوعي للمحاضرات 🗓️
               </h2>
-              <p className="opacity-90 text-sm">
-                مواعيد المحاضرات والقاعات وتحديثات التبديل والتأجيل اللحظية من ممثل الدفعة.
+              <p className="opacity-90 text-xs md:text-sm max-w-2xl leading-relaxed">
+                جدول المحاضرات الثابت الذي يتكرر كل أسبوع مع أوقات بدء المحاضرات والقاعات الدراسية، مربوط مباشرة بالمواد المضافة في دفعتك.
               </p>
             </div>
             {isManager && (
               <button
-                onClick={() => {
-                  setEditingScheduleId(null);
-                  setSchedCourseName("");
-                  setSchedProf("");
-                  setSchedDay("الأحد");
-                  setSchedDate("");
-                  setSchedStartTime("08:30 ص");
-                  setSchedEndTime("10:30 ص");
-                  setSchedHall("");
-                  setSchedNote("");
-                  setIsAddingSchedule(true);
-                }}
-                className="bg-white text-primary hover:bg-blue-50 px-4 py-2.5 rounded-xl font-bold text-sm shadow-md transition flex items-center gap-2 self-start md:self-auto"
+                onClick={() => handleOpenAddScheduleModal(schedFilterDay)}
+                className="bg-white text-indigo-700 hover:bg-blue-50 px-5 py-3 rounded-2xl font-black text-xs md:text-sm shadow-lg transition flex items-center gap-2 self-start md:self-auto shrink-0 active:scale-95"
               >
                 <Plus size={18} />
-                تسجيل موعد محاضرة
+                إضافة محاضرة للجدول الأسبوعي
               </button>
             )}
           </div>
         </div>
 
-        {/* Days Filter Pills */}
-        <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
-          {days.map(d => (
+        {/* View Mode Switcher + Days Filter Pills */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          {/* Days Filter Pills */}
+          <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+            {filterDays.map((d) => {
+              const countForDay =
+                d === "الكل"
+                  ? schedules.length
+                  : schedules.filter((s) => s.day === d).length;
+              const isToday = d === currentArabicDay;
+
+              return (
+                <button
+                  key={d}
+                  onClick={() => setSchedFilterDay(d)}
+                  className={`px-3.5 py-2 rounded-2xl text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 ${
+                    schedFilterDay === d
+                      ? "bg-primary text-white shadow-md shadow-primary/30"
+                      : isToday
+                      ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60"
+                      : "bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 border border-gray-100 dark:border-slate-700"
+                  }`}
+                >
+                  <span>{d}</span>
+                  {isToday && (
+                    <span
+                      className={`text-[9px] px-1.5 py-0.5 rounded-full font-black ${
+                        schedFilterDay === d
+                          ? "bg-white/25 text-white"
+                          : "bg-emerald-500 text-white"
+                      }`}
+                    >
+                      اليوم
+                    </span>
+                  )}
+                  {countForDay > 0 && (
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                        schedFilterDay === d
+                          ? "bg-black/20 text-white"
+                          : "bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-gray-400"
+                      }`}
+                    >
+                      {countForDay}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Toggle Weekly Organized View vs Cards View */}
+          <div className="flex items-center bg-white dark:bg-slate-800 p-1 rounded-2xl border border-gray-100 dark:border-slate-700 self-start sm:self-auto shrink-0">
             <button
-              key={d}
-              onClick={() => setSchedFilterDay(d)}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
-                schedFilterDay === d
-                  ? "bg-primary text-white shadow-md shadow-primary/30"
-                  : "bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 border border-gray-100 dark:border-slate-700"
+              onClick={() => setScheduleViewMode("WEEKLY_GRID")}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                scheduleViewMode === "WEEKLY_GRID"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-gray-500 dark:text-gray-400"
               }`}
             >
-              {d}
+              جدول الأيام الأسبوعي
             </button>
-          ))}
+            <button
+              onClick={() => setScheduleViewMode("CARDS")}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                scheduleViewMode === "CARDS"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-gray-500 dark:text-gray-400"
+              }`}
+            >
+              عرض البطاقات
+            </button>
+          </div>
         </div>
 
-        {/* Schedules Grid */}
-        <div className="grid gap-4 md:grid-cols-2">
-          {filteredSchedules.map((item) => (
-            <div
-              key={item.id}
-              className={`bg-white dark:bg-slate-800 p-5 rounded-3xl shadow-sm border transition relative overflow-hidden ${
-                item.isCancelled
-                  ? "border-red-200 dark:border-red-900/50 bg-red-50/20"
-                  : "border-gray-100 dark:border-slate-700 hover:shadow-md"
-              }`}
-            >
-              {item.isCancelled && (
-                <div className="bg-red-500 text-white text-[11px] font-bold px-3 py-1 rounded-bl-xl absolute top-0 left-0">
-                  ❌ ملغاة لهذا اليوم
-                </div>
-              )}
+        {/* WEEKLY TIMETABLE VIEW (Grouped by Day, Ordered by Start Time) */}
+        {scheduleViewMode === "WEEKLY_GRID" && schedFilterDay === "الكل" ? (
+          <div className="space-y-4">
+            {weekDays.map((dayName) => {
+              const dayLectures = sortedSchedules.filter((s) => s.day === dayName);
+              const isToday = dayName === currentArabicDay;
 
-              <div className="flex justify-between items-start mb-3">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="bg-primary/10 text-primary font-bold text-xs px-2.5 py-1 rounded-lg">
-                      {item.day}
-                    </span>
-                    {item.date && (
-                      <span className="text-xs text-gray-400">
-                        {item.date}
+              if (dayLectures.length === 0 && !isManager) {
+                return null;
+              }
+
+              return (
+                <div
+                  key={dayName}
+                  className={`bg-white dark:bg-slate-800 rounded-3xl border transition overflow-hidden shadow-xs ${
+                    isToday
+                      ? "border-emerald-300 dark:border-emerald-700 ring-2 ring-emerald-500/15"
+                      : "border-gray-100 dark:border-slate-700"
+                  }`}
+                >
+                  {/* Day Header Bar */}
+                  <div
+                    className={`px-5 py-3.5 flex items-center justify-between border-b ${
+                      isToday
+                        ? "bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-transparent border-emerald-100 dark:border-emerald-900/50"
+                        : "bg-gray-50/70 dark:bg-slate-800/80 border-gray-100 dark:border-slate-700"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span
+                        className={`w-3 h-3 rounded-full ${
+                          isToday ? "bg-emerald-500 animate-pulse" : "bg-primary/60"
+                        }`}
+                      />
+                      <h3 className="font-black text-base text-gray-800 dark:text-white">
+                        يوم {dayName}
+                      </h3>
+                      {isToday && (
+                        <span className="bg-emerald-500 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full">
+                          جدول اليوم 📍
+                        </span>
+                      )}
+                      <span className="text-xs font-bold text-gray-400">
+                        ({dayLectures.length} محاضرات)
                       </span>
+                    </div>
+
+                    {isManager && (
+                      <button
+                        onClick={() => handleOpenAddScheduleModal(dayName)}
+                        className="text-xs font-bold text-primary hover:bg-primary/10 px-3 py-1.5 rounded-xl transition flex items-center gap-1"
+                      >
+                        <Plus size={14} />
+                        <span>إضافة محاضرة ليوم {dayName}</span>
+                      </button>
                     )}
                   </div>
-                  <h3 className="font-bold text-lg text-gray-800 dark:text-white">
-                    {item.courseName}
-                  </h3>
-                  {item.professor && (
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                      التدريسي: {item.professor}
-                    </p>
+
+                  {/* Day Lectures Timeline */}
+                  {dayLectures.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-gray-400 dark:text-gray-500">
+                      لا توجد محاضرات مضافة ليوم {dayName} حتى الآن.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-gray-100 dark:divide-slate-700/70">
+                      {dayLectures.map((item, idx) => (
+                        <div
+                          key={item.id}
+                          className={`p-4 sm:px-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition ${
+                            item.isCancelled
+                              ? "bg-red-50/40 dark:bg-red-950/20 opacity-75"
+                              : "hover:bg-gray-50/60 dark:hover:bg-slate-700/30"
+                          }`}
+                        >
+                          <div className="flex items-start sm:items-center gap-4">
+                            {/* Prominent Start Time Box */}
+                            <div
+                              className={`min-w-[105px] px-3 py-2.5 rounded-2xl text-center border shrink-0 ${
+                                item.isCancelled
+                                  ? "bg-red-100/70 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300"
+                                  : "bg-primary/10 dark:bg-primary/20 border-primary/20 text-primary"
+                              }`}
+                            >
+                              <div className="text-[10px] font-bold opacity-75 flex items-center justify-center gap-1 mb-0.5">
+                                <Clock size={11} />
+                                <span>تبدأ الساعة</span>
+                              </div>
+                              <div className="text-sm font-black tracking-tight">
+                                {item.startTime}
+                              </div>
+                              {item.endTime && (
+                                <div className="text-[10px] opacity-70 font-semibold mt-0.5">
+                                  إلى {item.endTime}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Course & Professor Info */}
+                            <div className="space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-[11px] font-black text-gray-400">
+                                  المحاضرة #{idx + 1}
+                                </span>
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-lg ${
+                                    item.lectureType === "PRACTICAL"
+                                      ? "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                                      : "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+                                  }`}
+                                >
+                                  {item.lectureType === "PRACTICAL" ? "عملي / مختبر 🔬" : "نظري 📖"}
+                                </span>
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
+                                  🔄 تتكرر أسبوعياً
+                                </span>
+                                {item.isCancelled && (
+                                  <span className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-lg">
+                                    ❌ ملغاة هذا الأسبوع
+                                  </span>
+                                )}
+                              </div>
+
+                              <h4
+                                className={`font-black text-base sm:text-lg ${
+                                  item.isCancelled
+                                    ? "line-through text-gray-400 dark:text-gray-500"
+                                    : "text-gray-800 dark:text-white"
+                                }`}
+                              >
+                                {item.courseName}
+                              </h4>
+
+                              <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+                                {item.professor && (
+                                  <span className="flex items-center gap-1 font-medium">
+                                    <UserIcon size={13} className="text-primary" />
+                                    {item.professor}
+                                  </span>
+                                )}
+                                {item.hall && (
+                                  <span className="flex items-center gap-1 font-semibold text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-2.5 py-0.5 rounded-lg">
+                                    <MapPin size={13} />
+                                    {item.hall}
+                                  </span>
+                                )}
+                              </div>
+
+                              {item.note && (
+                                <p className="text-xs bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 px-3 py-1.5 rounded-xl border border-amber-200/70 dark:border-amber-900/40 mt-1.5 inline-block">
+                                  <strong className="ml-1">ملاحظة:</strong>
+                                  {item.note}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Manager Actions */}
+                          {isManager && (
+                            <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+                              <button
+                                onClick={() => handleToggleCancelSchedule(item)}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                                  item.isCancelled
+                                    ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                                    : "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                                }`}
+                              >
+                                {item.isCancelled ? "تفعيل المحاضرة" : "إلغاء مؤقت"}
+                              </button>
+                              <button
+                                onClick={() => openEditScheduleModal(item)}
+                                className="p-2 text-gray-400 hover:text-primary hover:bg-primary/10 rounded-xl transition"
+                                title="تعديل المحاضرة"
+                              >
+                                <Edit3 size={16} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteSchedule(item.id)}
+                                className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-xl transition"
+                                title="حذف من الجدول"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {schedules.length === 0 && (
+              <div className="py-16 text-center text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-dashed border-gray-200 dark:border-slate-700">
+                <Calendar size={48} className="mx-auto mb-3 opacity-30" />
+                <p className="font-bold text-gray-600 dark:text-gray-300 mb-1">
+                  الجدول الأسبوعي فارغ حالياً
+                </p>
+                <p className="text-xs mb-4">
+                  يمكن للممثل إضافة محاضرات الأسبوع باختيار المواد المضافة مسبقاً وتحديد وقت بدء كل محاضرة.
+                </p>
+                {isManager && (
+                  <button
+                    onClick={() => handleOpenAddScheduleModal()}
+                    className="bg-primary text-white px-5 py-2.5 rounded-xl text-xs font-bold shadow-md hover:bg-primary/90 transition inline-flex items-center gap-2"
+                  >
+                    <Plus size={16} />
+                    إضافة أول محاضرة للجدول
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          /* CARDS VIEW OR SINGLE DAY FILTER VIEW */
+          <div className="grid gap-4 md:grid-cols-2">
+            {filteredSchedules.map((item) => (
+              <div
+                key={item.id}
+                className={`bg-white dark:bg-slate-800 p-5 rounded-3xl shadow-sm border transition relative overflow-hidden ${
+                  item.isCancelled
+                    ? "border-red-200 dark:border-red-900/50 bg-red-50/20"
+                    : "border-gray-100 dark:border-slate-700 hover:shadow-md"
+                }`}
+              >
+                {item.isCancelled && (
+                  <div className="bg-red-500 text-white text-[11px] font-bold px-3 py-1 rounded-bl-xl absolute top-0 left-0">
+                    ❌ ملغاة لهذا الأسبوع
+                  </div>
+                )}
+
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                      <span className="bg-primary/10 text-primary font-bold text-xs px-2.5 py-1 rounded-lg">
+                        {item.day}
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold px-2.5 py-1 rounded-lg ${
+                          item.lectureType === "PRACTICAL"
+                            ? "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                            : "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+                        }`}
+                      >
+                        {item.lectureType === "PRACTICAL" ? "عملي / مختبر 🔬" : "نظري 📖"}
+                      </span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
+                        🔄 أسبوعي ثابت
+                      </span>
+                    </div>
+                    <h3 className="font-bold text-lg text-gray-800 dark:text-white">
+                      {item.courseName}
+                    </h3>
+                    {item.professor && (
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                        التدريسي: {item.professor}
+                      </p>
+                    )}
+                  </div>
+
+                  {isManager && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleToggleCancelSchedule(item)}
+                        title={item.isCancelled ? "استئناف المحاضرة" : "إلغاء المحاضرة مؤقتاً"}
+                        className={`p-2 rounded-xl text-xs font-bold transition ${
+                          item.isCancelled
+                            ? "bg-green-100 text-green-700 hover:bg-green-200"
+                            : "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                        }`}
+                      >
+                        {item.isCancelled ? "استئناف" : "إلغاء اليوم"}
+                      </button>
+                      <button
+                        onClick={() => openEditScheduleModal(item)}
+                        className="p-2 text-gray-400 hover:text-primary hover:bg-primary/10 rounded-xl transition"
+                        title="تعديل الموعد"
+                      >
+                        <Edit3 size={16} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteSchedule(item.id)}
+                        className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition"
+                        title="حذف الموعد"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   )}
                 </div>
 
-                {isManager && (
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => handleToggleCancelSchedule(item)}
-                      title={item.isCancelled ? "استئناف المحاضرة" : "إلغاء المحاضرة مؤقتاً"}
-                      className={`p-2 rounded-xl text-xs font-bold transition ${
-                        item.isCancelled 
-                          ? "bg-green-100 text-green-700 hover:bg-green-200" 
-                          : "bg-amber-100 text-amber-700 hover:bg-amber-200"
-                      }`}
-                    >
-                      {item.isCancelled ? "استئناف" : "إلغاء اليوم"}
-                    </button>
-                    <button
-                      onClick={() => {
-                        setEditingScheduleId(item.id);
-                        setSchedCourseName(item.courseName);
-                        setSchedProf(item.professor || "");
-                        setSchedDay(item.day);
-                        setSchedDate(item.date || "");
-                        setSchedStartTime(item.startTime);
-                        setSchedEndTime(item.endTime);
-                        setSchedHall(item.hall);
-                        setSchedNote(item.note || "");
-                        setIsAddingSchedule(true);
-                      }}
-                      className="p-2 text-gray-400 hover:text-primary hover:bg-primary/10 rounded-xl transition"
-                      title="تعديل الموعد"
-                    >
-                      <Edit3 size={16} />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteSchedule(item.id)}
-                      className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition"
-                      title="حذف الموعد"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                {/* Start Time & Hall */}
+                <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-gray-100 dark:border-slate-700/60">
+                  <div className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-200 bg-primary/5 dark:bg-slate-700/60 p-2.5 rounded-xl border border-primary/10">
+                    <Clock size={16} className="text-primary flex-shrink-0" />
+                    <div>
+                      <span className="text-[10px] text-gray-400 block">وقت بدء المحاضرة</span>
+                      <span className="font-black text-primary">
+                        {item.startTime}
+                        {item.endTime ? ` - ${item.endTime}` : ""}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-slate-700/50 p-2.5 rounded-xl">
+                    <MapPin size={16} className="text-amber-500 flex-shrink-0" />
+                    <div>
+                      <span className="text-[10px] text-gray-400 block">القاعة / المختبر</span>
+                      <span className="font-bold truncate block">{item.hall}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {item.note && (
+                  <div className="mt-3 text-xs bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 p-2.5 rounded-xl border border-amber-200 dark:border-amber-900/40">
+                    <span className="font-bold ml-1">تنبيه الممثل:</span>
+                    {item.note}
                   </div>
                 )}
               </div>
+            ))}
 
-              {/* Time & Hall */}
-              <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-gray-100 dark:border-slate-700/60">
-                <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-slate-700/50 p-2.5 rounded-xl">
-                  <Clock size={16} className="text-primary flex-shrink-0" />
-                  <span className="font-semibold">{item.startTime} - {item.endTime}</span>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-slate-700/50 p-2.5 rounded-xl">
-                  <MapPin size={16} className="text-amber-500 flex-shrink-0" />
-                  <span className="font-semibold truncate">{item.hall}</span>
-                </div>
+            {filteredSchedules.length === 0 && (
+              <div className="col-span-full py-16 text-center text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-dashed border-gray-200 dark:border-slate-700">
+                <Calendar size={48} className="mx-auto mb-2 opacity-30" />
+                <p className="mb-3">لا توجد محاضرات مجدولة لهذا اليوم.</p>
+                {isManager && (
+                  <button
+                    onClick={() => handleOpenAddScheduleModal(schedFilterDay)}
+                    className="bg-primary text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md hover:bg-primary/90 transition inline-flex items-center gap-1.5"
+                  >
+                    <Plus size={15} />
+                    إضافة محاضرة ليوم {schedFilterDay === "الكل" ? "الأحد" : schedFilterDay}
+                  </button>
+                )}
               </div>
-
-              {item.note && (
-                <div className="mt-3 text-xs bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 p-2.5 rounded-xl border border-amber-200 dark:border-amber-900/40">
-                  <span className="font-bold ml-1">تنبيه الممثل:</span>
-                  {item.note}
-                </div>
-              )}
-            </div>
-          ))}
-
-          {filteredSchedules.length === 0 && (
-            <div className="col-span-full py-16 text-center text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-dashed border-gray-200 dark:border-slate-700">
-              <Calendar size={48} className="mx-auto mb-2 opacity-30" />
-              لا توجد محاضرات مجدولة لهذا اليوم.
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {/* Add / Edit Schedule Modal */}
         {isAddingSchedule && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white dark:bg-slate-800 w-full max-w-md rounded-3xl shadow-2xl p-6 animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="font-bold text-lg text-gray-800 dark:text-white">
-                  {editingScheduleId ? "تعديل موعد محاضرة" : "تسجيل موعد محاضرة جديد"}
-                </h3>
-                <button onClick={() => setIsAddingSchedule(false)}>
-                  <X size={20} className="text-gray-400" />
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-slate-800 w-full max-w-lg rounded-3xl shadow-2xl p-6 animate-in zoom-in-95 max-h-[92vh] overflow-y-auto border border-gray-100 dark:border-slate-700">
+              <div className="flex justify-between items-start mb-4 pb-3 border-b border-gray-100 dark:border-slate-700">
+                <div>
+                  <span className="text-[11px] font-bold text-primary bg-primary/10 px-2.5 py-0.5 rounded-lg inline-block mb-1">
+                    الجدول الأسبوعي المتكرر 🔄
+                  </span>
+                  <h3 className="font-black text-lg text-gray-800 dark:text-white">
+                    {editingScheduleId ? "تعديل موعد المحاضرة" : "إضافة محاضرة للجدول الأسبوعي"}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setIsAddingSchedule(false)}
+                  className="p-1.5 text-gray-400 hover:text-gray-600 rounded-xl"
+                >
+                  <X size={20} />
                 </button>
               </div>
 
-              <div className="space-y-3">
+              <div className="space-y-4">
+                {/* 1. Select Course from already added Courses */}
                 <div>
-                  <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                    المادة الدراسية
-                  </label>
-                  <input
-                    type="text"
-                    value={schedCourseName}
-                    onChange={(e) => setSchedCourseName(e.target.value)}
-                    placeholder="اسم المادة (مثل: هندسة البرمجيات)"
-                    className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2 text-sm outline-none"
-                  />
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-gray-700 dark:text-gray-300">
+                      اختر المادة من مواد الدفعة المضافة <span className="text-red-500">*</span>
+                    </label>
+                    {courses.length === 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddingSchedule(false);
+                          setActiveTab(Tab.COURSES);
+                        }}
+                        className="text-[11px] text-primary font-bold hover:underline"
+                      >
+                        + إضافة مواد أولاً
+                      </button>
+                    )}
+                  </div>
+
+                  {courses.length > 0 ? (
+                    <div className="space-y-2">
+                      <select
+                        value={schedCourseId}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSchedCourseId(val);
+                          if (val === "__custom__") {
+                            setSchedCourseName("");
+                            setSchedProf("");
+                          } else {
+                            const found = courses.find((c) => c.id === val);
+                            if (found) {
+                              setSchedCourseName(found.name);
+                              const profText =
+                                found.professors?.length && found.professors[0] !== "غير محدد"
+                                  ? found.professors.join("، ")
+                                  : "";
+                              setSchedProf(profText);
+                            }
+                          }
+                        }}
+                        className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20 cursor-pointer"
+                      >
+                        {courses.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            📚 {c.name}{" "}
+                            {c.professors?.length && c.professors[0] !== "غير محدد"
+                              ? `— (${c.professors.join("، ")})`
+                              : ""}
+                          </option>
+                        ))}
+                        <option value="__custom__">✍️ كتابة اسم مادة أخرى يدوياً...</option>
+                      </select>
+
+                      {/* Quick Course Chips for 1-Tap Selection */}
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {courses.map((c) => {
+                          const isSelected = schedCourseId === c.id;
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => {
+                                setSchedCourseId(c.id);
+                                setSchedCourseName(c.name);
+                                const profText =
+                                  c.professors?.length && c.professors[0] !== "غير محدد"
+                                    ? c.professors.join("، ")
+                                    : "";
+                                setSchedProf(profText);
+                              }}
+                              className={`text-[11px] font-bold px-3 py-1.5 rounded-xl border transition ${
+                                isSelected
+                                  ? "bg-primary text-white border-primary shadow-xs"
+                                  : "bg-gray-50 dark:bg-slate-700/60 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-slate-600 hover:border-primary/40"
+                              }`}
+                            >
+                              {c.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {(courses.length === 0 || schedCourseId === "__custom__") && (
+                    <input
+                      type="text"
+                      value={schedCourseName}
+                      onChange={(e) => setSchedCourseName(e.target.value)}
+                      placeholder="اكتب اسم المادة..."
+                      className="w-full mt-2 bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-2.5 text-sm outline-none"
+                    />
+                  )}
                 </div>
 
-                <div>
-                  <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                    اسم الأستاذ / التدريسي
-                  </label>
-                  <input
-                    type="text"
-                    value={schedProf}
-                    onChange={(e) => setSchedProf(e.target.value)}
-                    placeholder="د. فلان"
-                    className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2 text-sm outline-none"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
+                {/* 2. Day of the Week & Lecture Type (Theory / Practical) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                      اليوم
+                    <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                      يوم المحاضرة (يتكرر كل أسبوع) <span className="text-red-500">*</span>
                     </label>
                     <select
                       value={schedDay}
                       onChange={(e) => setSchedDay(e.target.value)}
-                      className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2 text-sm outline-none"
+                      className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-3.5 py-2.5 text-sm font-bold outline-none cursor-pointer"
                     >
-                      {["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "السبت"].map(d => (
-                        <option key={d} value={d}>{d}</option>
+                      {weekDays.map((d) => (
+                        <option key={d} value={d}>
+                          كل يوم {d}
+                        </option>
                       ))}
                     </select>
                   </div>
+
                   <div>
-                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                      التاريخ (اختياري)
+                    <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                      نوع المحاضرة
+                    </label>
+                    <div className="grid grid-cols-2 gap-2 bg-gray-50 dark:bg-slate-700/60 p-1 rounded-2xl border border-gray-200 dark:border-slate-600">
+                      <button
+                        type="button"
+                        onClick={() => setSchedLectureType("THEORY")}
+                        className={`py-2 rounded-xl text-xs font-bold transition ${
+                          schedLectureType === "THEORY"
+                            ? "bg-white dark:bg-slate-800 text-primary shadow-xs"
+                            : "text-gray-500 dark:text-gray-400"
+                        }`}
+                      >
+                        نظري 📖
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSchedLectureType("PRACTICAL")}
+                        className={`py-2 rounded-xl text-xs font-bold transition ${
+                          schedLectureType === "PRACTICAL"
+                            ? "bg-white dark:bg-slate-800 text-purple-600 dark:text-purple-400 shadow-xs"
+                            : "text-gray-500 dark:text-gray-400"
+                        }`}
+                      >
+                        عملي / مختبر 🔬
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Lecture Start Time & End Time (With Time Picker + 1-Tap Presets) */}
+                <div className="p-4 rounded-2xl bg-blue-50/50 dark:bg-slate-700/40 border border-blue-100 dark:border-slate-600 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-black text-blue-900 dark:text-blue-200 mb-1 flex items-center gap-1">
+                        <Clock size={14} className="text-primary" />
+                        وقت بدء المحاضرة <span className="text-red-500">*</span>
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="time"
+                          value={arabicTimeTo24h(schedStartTime)}
+                          onChange={(e) =>
+                            setSchedStartTime(format24hToArabic(e.target.value))
+                          }
+                          className="bg-white dark:bg-slate-800 dark:text-white border border-blue-200 dark:border-slate-600 rounded-xl px-2.5 py-2 text-xs font-bold outline-none"
+                        />
+                        <input
+                          type="text"
+                          value={schedStartTime}
+                          onChange={(e) => setSchedStartTime(e.target.value)}
+                          placeholder="08:30 ص"
+                          className="flex-1 bg-white dark:bg-slate-800 dark:text-white border border-blue-200 dark:border-slate-600 rounded-xl px-3 py-2 text-xs font-black text-center outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-gray-600 dark:text-gray-300 mb-1 block">
+                        وقت انتهاء المحاضرة (اختياري)
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="time"
+                          value={arabicTimeTo24h(schedEndTime)}
+                          onChange={(e) =>
+                            setSchedEndTime(format24hToArabic(e.target.value))
+                          }
+                          className="bg-white dark:bg-slate-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-2.5 py-2 text-xs font-bold outline-none"
+                        />
+                        <input
+                          type="text"
+                          value={schedEndTime}
+                          onChange={(e) => setSchedEndTime(e.target.value)}
+                          placeholder="10:30 ص"
+                          className="flex-1 bg-white dark:bg-slate-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2 text-xs font-bold text-center outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quick Start Time Chips */}
+                  <div>
+                    <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 block mb-1.5">
+                      اختيار سريع لوقت بدء المحاضرة:
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {quickStartTimes.map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setSchedStartTime(t)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                            schedStartTime === t
+                              ? "bg-primary text-white shadow-xs"
+                              : "bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-slate-600 hover:border-primary"
+                          }`}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Quick End Time Chips */}
+                  <div>
+                    <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 block mb-1.5">
+                      اختيار سريع لوقت الانتهاء:
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {quickEndTimes.map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setSchedEndTime(t)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                            schedEndTime === t
+                              ? "bg-indigo-600 text-white shadow-xs"
+                              : "bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-slate-600 hover:border-indigo-500"
+                          }`}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Professor (Auto-filled from course, editable) & Hall */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-600 dark:text-gray-400 mb-1 block">
+                      التدريسي (يُملأ تلقائياً من المادة)
                     </label>
                     <input
-                      type="date"
-                      value={schedDate}
-                      onChange={(e) => setSchedDate(e.target.value)}
-                      className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2 text-sm outline-none"
+                      type="text"
+                      value={schedProf}
+                      onChange={(e) => setSchedProf(e.target.value)}
+                      placeholder="د. فلان"
+                      className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3.5 py-2.5 text-xs outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-gray-600 dark:text-gray-400 mb-1 block">
+                      القاعة أو المختبر
+                    </label>
+                    <input
+                      type="text"
+                      value={schedHall}
+                      onChange={(e) => setSchedHall(e.target.value)}
+                      placeholder="مثال: قاعة 104 / مختبر الشبكات"
+                      className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3.5 py-2.5 text-xs outline-none"
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                      وقت البدء
-                    </label>
-                    <input
-                      type="text"
-                      value={schedStartTime}
-                      onChange={(e) => setSchedStartTime(e.target.value)}
-                      placeholder="08:30 ص"
-                      className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2 text-sm outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                      وقت الانتهاء
-                    </label>
-                    <input
-                      type="text"
-                      value={schedEndTime}
-                      onChange={(e) => setSchedEndTime(e.target.value)}
-                      placeholder="10:30 ص"
-                      className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2 text-sm outline-none"
-                    />
-                  </div>
-                </div>
-
+                {/* 5. Note */}
                 <div>
-                  <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                    القاعة أو المختبر
+                  <label className="text-xs font-bold text-gray-600 dark:text-gray-400 mb-1 block">
+                    ملاحظات إضافية (اختياري)
                   </label>
                   <input
                     type="text"
-                    value={schedHall}
-                    onChange={(e) => setSchedHall(e.target.value)}
-                    placeholder="مثال: قاعة 104 / مختبر البرمجيات"
-                    className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2 text-sm outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                    ملاحظات التغيير / التبديل
-                  </label>
-                  <textarea
                     value={schedNote}
                     onChange={(e) => setSchedNote(e.target.value)}
-                    placeholder="مثال: تم تبديل موعد المحاضرة من الساعة 8 إلى 9:30 بناءً على طلب الدكتور"
-                    className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2 text-sm outline-none resize-none h-20"
+                    placeholder="مثال: الحضور بالزي الرسمي أو إحضار الحاسبة..."
+                    className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3.5 py-2.5 text-xs outline-none"
                   />
                 </div>
 
-                <div className="flex gap-2 pt-2">
+                <div className="flex gap-2 pt-3 border-t border-gray-100 dark:border-slate-700">
                   <button
+                    type="button"
                     onClick={() => setIsAddingSchedule(false)}
-                    className="flex-1 bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 py-2.5 rounded-xl font-bold text-sm"
+                    className="flex-1 bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 py-3 rounded-2xl font-bold text-xs"
                   >
                     إلغاء
                   </button>
                   <button
+                    type="button"
                     onClick={handleSaveSchedule}
-                    className="flex-1 bg-primary text-white py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-primary/30"
+                    className="flex-1 bg-primary text-white py-3 rounded-2xl font-black text-xs shadow-lg shadow-primary/30 hover:bg-primary/90 transition"
                   >
-                    حفظ الموعد
+                    {editingScheduleId ? "حفظ التعديلات" : "إضافة للجدول الأسبوعي"}
                   </button>
                 </div>
               </div>
