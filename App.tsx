@@ -878,7 +878,13 @@ export default function App() {
   const [selectedScheduleSlotId, setSelectedScheduleSlotId] = useState<string>("");
   const [newSessionTargetGroup, setNewSessionTargetGroup] = useState<string>("ALL");
   const [attendanceGroupFilter, setAttendanceGroupFilter] = useState<string>("DEFAULT");
+  const [attendanceSheetGroupFilter, setAttendanceSheetGroupFilter] = useState<string>("SESSION_GROUP");
   const [isAddingExceptionModalOpen, setIsAddingExceptionModalOpen] = useState<boolean>(false);
+  const [isExceptionModalOpen, setIsExceptionModalOpen] = useState<boolean>(false);
+  const [exceptionMode, setExceptionMode] = useState<"ATTEND_WITH_GROUP" | "SWAP_WITH_STUDENT">("ATTEND_WITH_GROUP");
+  const [exceptionGuestStudentId, setExceptionGuestStudentId] = useState<string>("");
+  const [exceptionSwapTargetStudentId, setExceptionSwapTargetStudentId] = useState<string>("");
+  const [exceptionNoteInput, setExceptionNoteInput] = useState<string>("");
   const [exceptionStudentId, setExceptionStudentId] = useState<string>("");
   const [exceptionSwappedWithId, setExceptionSwappedWithId] = useState<string>("");
   const [exceptionNote, setExceptionNote] = useState<string>("");
@@ -3098,6 +3104,7 @@ export default function App() {
       setSelectedCourseForAttendance(matchedCourse);
     }
     setAttendanceGroupFilter("DEFAULT");
+    setAttendanceSheetGroupFilter("SESSION_GROUP");
     setSelectedSessionId(newSession.id);
     setActiveTab(Tab.ATTENDANCE);
 
@@ -3145,6 +3152,7 @@ export default function App() {
 
     await saveAttendanceSessionToFirestore(newSession);
     setAttendanceGroupFilter("DEFAULT");
+    setAttendanceSheetGroupFilter("SESSION_GROUP");
     setSelectedSessionId(newSession.id);
     if (autoCopyFromSessionId) {
       await handleCopyAttendanceFromSession(autoCopyFromSessionId, newSession.id);
@@ -3172,6 +3180,7 @@ export default function App() {
     };
     await saveAttendanceSessionToFirestore(updatedSession);
     setAttendanceGroupFilter("DEFAULT");
+    setAttendanceSheetGroupFilter("SESSION_GROUP");
   };
 
   // Add an exceptional student from another group (with optional swap) to the current session
@@ -3259,7 +3268,96 @@ export default function App() {
     setExceptionSearchQuery("");
   };
 
+  const handleAddExceptionOrSwapAttendance = async () => {
+    if (!selectedSessionId || !exceptionGuestStudentId) return;
+    const sessionObj = attendanceSessions.find((s) => s.id === selectedSessionId);
+    const guestStudent = appUsers.find((u) => u.uid === exceptionGuestStudentId);
+    if (!guestStudent || !sessionObj) return;
+
+    const swappedStudent =
+      exceptionMode === "SWAP_WITH_STUDENT" && exceptionSwapTargetStudentId
+        ? appUsers.find((u) => u.uid === exceptionSwapTargetStudentId)
+        : undefined;
+
+    const existingGuestRec = attendanceRecords.find(
+      (r) => r.sessionId === selectedSessionId && r.studentId === guestStudent.uid
+    );
+
+    const guestRec: AttendanceRecord = {
+      id: existingGuestRec
+        ? existingGuestRec.id
+        : `rec_${Date.now()}_${guestStudent.uid}`,
+      batchCode: effectiveBatchCode,
+      sessionId: selectedSessionId,
+      studentId: guestStudent.uid,
+      status: "PRESENT",
+      isException: true,
+      originalGroup: guestStudent.academicGroup || "كروب آخر",
+      ...(swappedStudent
+        ? {
+            swappedWithStudentId: swappedStudent.uid,
+            swappedWithStudentName: swappedStudent.name,
+          }
+        : {}),
+      ...(exceptionNoteInput.trim()
+        ? { exceptionNote: exceptionNoteInput.trim() }
+        : {}),
+      timestamp: Date.now(),
+    };
+
+    await saveAttendanceRecordToFirestore(guestRec);
+
+    if (swappedStudent) {
+      const existingSwapTargetRec = attendanceRecords.find(
+        (r) =>
+          r.sessionId === selectedSessionId && r.studentId === swappedStudent.uid
+      );
+      const swapTargetRec: AttendanceRecord = {
+        id: existingSwapTargetRec
+          ? existingSwapTargetRec.id
+          : `rec_${Date.now()}_${swappedStudent.uid}`,
+        batchCode: effectiveBatchCode,
+        sessionId: selectedSessionId,
+        studentId: swappedStudent.uid,
+        status: "EXCUSED",
+        swappedWithStudentId: guestStudent.uid,
+        swappedWithStudentName: guestStudent.name,
+        exceptionNote:
+          exceptionNoteInput.trim() ||
+          `تبديل كروب مؤقت مع الطالب (${guestStudent.name})`,
+        timestamp: Date.now(),
+      };
+      await saveAttendanceRecordToFirestore(swapTargetRec);
+    }
+
+    const courseObj = courses.find((c) => c.id === sessionObj.courseId);
+    await notifyUserIfAllowed({
+      targetUser: guestStudent,
+      category: "ATTENDANCE",
+      title: `🔄 تسجيل حضور استثنائي في ${courseObj?.name || sessionObj.courseName || "المحاضرة"}`,
+      content: `تم تسجيل حضورك الاستثنائي مع (${
+        sessionObj.targetGroup && sessionObj.targetGroup !== "ALL"
+          ? sessionObj.targetGroup
+          : "المحاضرة"
+      })${swappedStudent ? ` بديلاً عن (${swappedStudent.name})` : ""} بتاريخ ${
+        sessionObj.date
+      }.`,
+      batchCode: effectiveBatchCode,
+      targetTab: Tab.ATTENDANCE,
+    });
+
+    setIsExceptionModalOpen(false);
+    setExceptionGuestStudentId("");
+    setExceptionSwapTargetStudentId("");
+    setExceptionNoteInput("");
+    setExceptionMode("ATTEND_WITH_GROUP");
+  };
+
   const handleRemoveExceptionRecord = async (recordId: string) => {
+    await deleteAttendanceRecordFromFirestore(recordId);
+  };
+
+  const handleRemoveExceptionStudent = async (recordId: string) => {
     await deleteAttendanceRecordFromFirestore(recordId);
   };
 
@@ -7237,6 +7335,7 @@ export default function App() {
                       className="bg-white dark:bg-slate-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 hover:shadow-md transition cursor-pointer group"
                       onClick={() => {
                         setAttendanceGroupFilter("DEFAULT");
+                        setAttendanceSheetGroupFilter("SESSION_GROUP");
                         setSelectedSessionId(session.id);
                       }}
                     >
