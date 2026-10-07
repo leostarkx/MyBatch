@@ -9,6 +9,60 @@ export enum UserRole {
 // App Theme Colors
 export type ThemeColor = 'blue' | 'emerald' | 'violet' | 'rose' | 'amber';
 
+// Notification Categories & Preferences Schema
+export type NotificationCategory =
+  | 'ANNOUNCEMENT'
+  | 'ASSIGNMENT'
+  | 'EXAM'
+  | 'MATERIAL'
+  | 'SUMMARY'
+  | 'GRADE'
+  | 'ATTENDANCE'
+  | 'SCHEDULE'
+  | 'PROJECT'
+  | 'SUGGESTION'
+  | 'CHAT'
+  | 'SYSTEM'
+  | 'MENTION';
+
+export interface NotificationPreferences {
+  enabled: boolean; // الوضع العام للإشعارات (مفعل / معطل)
+  browserPush: boolean; // إشعارات المتصفح والنظام (Push Notifications)
+  soundEnabled: boolean; // تنبيه صوتي عند وصول إشعار
+  categories: {
+    announcements: boolean; // التبليغات والإعلانات العامة 📢
+    assignments: boolean; // الواجبات والتكليفات الدراسية 📝
+    exams: boolean; // الامتحانات والكويزات 🎓
+    materials: boolean; // المحاضرات والملازم الجديدة 📚
+    summaries: boolean; // ملخصات الطلاب والمراجعات ✍️
+    grades: boolean; // رصد وتحديث الدرجات والسعيات 📊
+    attendance: boolean; // تسجيل الحضور والغياب ✅
+    schedule: boolean; // تحديثات الجدول وإلغاء المحاضرات 🗓️
+    projects: boolean; // المشاريع والكروبات 🚀
+    suggestions: boolean; // ردود الممثل بصندوق الدفعة 📬
+    chatMentions: boolean; // الإشارات والردود في دردشة الدفعة 💬
+  };
+}
+
+export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  enabled: true,
+  browserPush: true,
+  soundEnabled: true,
+  categories: {
+    announcements: true,
+    assignments: true,
+    exams: true,
+    materials: true,
+    summaries: true,
+    grades: true,
+    attendance: true,
+    schedule: true,
+    projects: true,
+    suggestions: true,
+    chatMentions: true,
+  },
+};
+
 // User Schema
 export interface User {
   uid: string;
@@ -28,6 +82,7 @@ export interface User {
   signatureColor?: string;
   studiedMaterialIds?: string[];
   bookmarkedMaterialIds?: string[];
+  notificationPrefs?: NotificationPreferences;
 }
 
 // Batch Instance Schema (النسخ والدفعات)
@@ -66,12 +121,14 @@ export interface LectureSchedule {
 export interface Notification {
   id: string;
   userId: string;
-  type: 'MENTION' | 'ANNOUNCEMENT';
+  batchCode?: string;
+  type: NotificationCategory;
   title?: string;
   content: string;
   isRead: boolean;
   timestamp: number;
   linkTo?: string;
+  targetTab?: Tab;
 }
 
 // Announcement Poll Option
@@ -143,8 +200,14 @@ export interface AttendanceSession {
   id: string;
   batchCode: string; // SCOPED
   courseId: string;
+  courseName?: string;
+  scheduleId?: string;
   date: string;
   title?: string;
+  startTime?: string;
+  endTime?: string;
+  hall?: string;
+  lectureType?: 'THEORY' | 'PRACTICAL';
   createdBy?: string;
   timestamp?: number;
 }

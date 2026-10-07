@@ -30,6 +30,7 @@ import {
   StudentSummary,
   SummaryCategory,
   SummaryAttachment,
+  Tab,
 } from "../types";
 import {
   uploadFileToStorage,
@@ -39,9 +40,11 @@ import {
   saveStudentSummaryToFirestore,
   deleteStudentSummaryFromFirestore,
 } from "../services/firebase";
+import { broadcastBatchNotification } from "../services/notificationService";
 
 interface StudentSummariesHubProps {
   currentUser: User | null;
+  allUsers?: User[];
   courses: Course[];
   summaries: StudentSummary[];
   effectiveBatchCode: string;
@@ -101,6 +104,7 @@ const CATEGORY_META: {
 
 export const StudentSummariesHub: React.FC<StudentSummariesHubProps> = ({
   currentUser,
+  allUsers = [],
   courses,
   summaries,
   effectiveBatchCode,
@@ -242,6 +246,17 @@ export const StudentSummariesHub: React.FC<StudentSummariesHubProps> = ({
       };
 
       await saveStudentSummaryToFirestore(summaryItem);
+
+      await broadcastBatchNotification({
+        allUsers,
+        batchCode: effectiveBatchCode,
+        excludeUid: currentUser.uid,
+        category: "SUMMARY",
+        title: `✍️ ملخص جديد في ${summaryItem.courseName}`,
+        content: `نشر (${currentUser.name}) ملخصاً جديداً بعنوان: «${summaryItem.title}».`,
+        targetTab: Tab.SUMMARIES,
+      });
+
       setIsAddModalOpen(false);
     } catch (err) {
       console.error("Error saving student summary:", err);

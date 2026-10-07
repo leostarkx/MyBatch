@@ -6,6 +6,19 @@ import { BatchLeaderboard } from "./components/BatchLeaderboard";
 import { StudentSummariesHub } from "./components/StudentSummariesHub";
 import { BatchSuggestionsBox } from "./components/BatchSuggestionsBox";
 import { FinalExamGradeCalculator } from "./components/FinalExamGradeCalculator";
+import { NotificationPreferencesCard } from "./components/NotificationPreferencesCard";
+import { NotificationCenterModal } from "./components/NotificationCenterModal";
+import {
+  getUserNotificationPreferences,
+  isCategoryEnabledForUser,
+  playNotificationChime,
+  showBrowserPushNotification,
+  notifyUserIfAllowed,
+  broadcastBatchNotification,
+} from "./services/notificationService";
+import {
+  markNotificationAsReadInFirestore,
+} from "./services/firebase";
 import {
   User,
   UserRole,
@@ -853,6 +866,10 @@ export default function App() {
   const [isCopyingAttendance, setIsCopyingAttendance] = useState(false);
   const [copyAttendanceSuccess, setCopyAttendanceSuccess] = useState<string | null>(null);
   const [attendanceReportStudent, setAttendanceReportStudent] = useState<User | null>(null);
+  const [attendanceTargetDate, setAttendanceTargetDate] = useState<string>(() =>
+    new Date().toISOString().slice(0, 10)
+  );
+  const [selectedScheduleSlotId, setSelectedScheduleSlotId] = useState<string>("");
 
   // Student Management State (Admin)
   const [newStudentName, setNewStudentName] = useState("");
@@ -1072,13 +1089,61 @@ export default function App() {
     };
   }, [effectiveBatchCode]);
 
+  const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
+  const [liveToastNotif, setLiveToastNotif] = useState<Notification | null>(null);
+  const knownNotifIdsRef = useRef<Set<string>>(new Set());
+  const isInitialNotifLoadRef = useRef<boolean>(true);
+  const currentUserRef = useRef<User | null>(null);
+  currentUserRef.current = currentUser;
+
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      setNotifications([]);
+      knownNotifIdsRef.current.clear();
+      isInitialNotifLoadRef.current = true;
+      return;
+    }
+
+    knownNotifIdsRef.current.clear();
+    isInitialNotifLoadRef.current = true;
+
     const unsubNotifs = subscribeNotifications(currentUser.uid, (items) => {
       setNotifications(items);
+
+      if (isInitialNotifLoadRef.current) {
+        items.forEach((n) => knownNotifIdsRef.current.add(n.id));
+        isInitialNotifLoadRef.current = false;
+        return;
+      }
+
+      // Detect newly arrived unread notifications
+      const newlyArrived = items.filter(
+        (n) => !knownNotifIdsRef.current.has(n.id) && !n.isRead
+      );
+      items.forEach((n) => knownNotifIdsRef.current.add(n.id));
+
+      if (newlyArrived.length > 0) {
+        const latest = newlyArrived[0];
+        const activeUser = currentUserRef.current;
+        const prefs = getUserNotificationPreferences(activeUser);
+
+        if (prefs.enabled && isCategoryEnabledForUser(activeUser, latest.type)) {
+          setLiveToastNotif(latest);
+          if (prefs.soundEnabled) {
+            playNotificationChime();
+          }
+          if (prefs.browserPush) {
+            showBrowserPushNotification(
+              latest.title || "إشعار جديد - منصة دفعتي 🔔",
+              latest.content,
+              latest.id
+            );
+          }
+        }
+      }
     });
     return () => unsubNotifs();
-  }, [currentUser]);
+  }, [currentUser?.uid]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -1225,6 +1290,52 @@ export default function App() {
     };
 
     await saveChatMessageToFirestore(msgData);
+
+    // Notify replied-to user or @mentioned users in batch chat
+    const notifiedUids = new Set<string>();
+    if (replyingTo && replyingTo.id) {
+      const originalMsg = chatMessages.find((m) => m.id === replyingTo.id);
+      if (originalMsg && originalMsg.senderId !== currentUser.uid) {
+        const targetUser = appUsers.find((u) => u.uid === originalMsg.senderId);
+        if (targetUser) {
+          notifiedUids.add(targetUser.uid);
+          await notifyUserIfAllowed({
+            targetUser,
+            category: "CHAT",
+            title: `💬 رد جديد من ${currentUser.name} في دردشة الدفعة`,
+            content: msgData.content.slice(0, 120),
+            batchCode: effectiveBatchCode,
+            targetTab: Tab.CHAT,
+          });
+        }
+      }
+    }
+
+    // Check @username mentions in message content
+    const mentionMatches = (newMessage || "").match(/@([a-zA-Z0-9_]+)/g);
+    if (mentionMatches) {
+      for (const match of mentionMatches) {
+        const cleanUname = match.slice(1).toLowerCase();
+        const mentionedUser = appUsers.find(
+          (u) =>
+            u.username?.toLowerCase() === cleanUname &&
+            u.uid !== currentUser.uid &&
+            !notifiedUids.has(u.uid)
+        );
+        if (mentionedUser) {
+          notifiedUids.add(mentionedUser.uid);
+          await notifyUserIfAllowed({
+            targetUser: mentionedUser,
+            category: "MENTION",
+            title: `💬 أشار إليك (${currentUser.name}) في دردشة الدفعة`,
+            content: msgData.content.slice(0, 120),
+            batchCode: effectiveBatchCode,
+            targetTab: Tab.CHAT,
+          });
+        }
+      }
+    }
+
     setNewMessage("");
     setReplyingTo(null);
     setChatMediaUrl("");
@@ -1398,6 +1509,21 @@ export default function App() {
       updatedAt: Date.now(),
     };
     await saveScheduleToFirestore(scheduleItem);
+
+    await broadcastBatchNotification({
+      allUsers: appUsers,
+      batchCode: effectiveBatchCode,
+      excludeUid: currentUser?.uid,
+      category: "SCHEDULE",
+      title: editingScheduleId
+        ? `🗓️ تحديث محاضرة في الجدول: ${resolvedCourseName}`
+        : `🗓️ محاضرة جديدة في الجدول: ${resolvedCourseName}`,
+      content: `يوم ${schedDay} • وقت البدء: ${schedStartTime.trim()}${
+        schedHall.trim() ? ` • القاعة: ${schedHall.trim()}` : ""
+      }`,
+      targetTab: Tab.SCHEDULE,
+    });
+
     setIsAddingSchedule(false);
     setEditingScheduleId(null);
     setSchedCourseId("");
@@ -1418,8 +1544,23 @@ export default function App() {
   };
 
   const handleToggleCancelSchedule = async (item: LectureSchedule) => {
-    const updated = { ...item, isCancelled: !item.isCancelled, updatedAt: Date.now() };
+    const nextCancelled = !item.isCancelled;
+    const updated = { ...item, isCancelled: nextCancelled, updatedAt: Date.now() };
     await saveScheduleToFirestore(updated);
+
+    await broadcastBatchNotification({
+      allUsers: appUsers,
+      batchCode: effectiveBatchCode,
+      excludeUid: currentUser?.uid,
+      category: "SCHEDULE",
+      title: nextCancelled
+        ? `⚠️ إلغاء محاضرة: ${item.courseName}`
+        : `✅ استئناف محاضرة: ${item.courseName}`,
+      content: nextCancelled
+        ? `تم إلغاء محاضرة (${item.courseName}) ليوم ${item.day} (${item.startTime}) مؤقتاً.`
+        : `تم تفعيل واستئناف محاضرة (${item.courseName}) ليوم ${item.day} (${item.startTime}) في الجدول.`,
+      targetTab: Tab.SCHEDULE,
+    });
   };
 
   // --- Batches (النسخ والدفعات) Logic (Developer / Owner) ---
@@ -2255,6 +2396,14 @@ export default function App() {
                 timestamp: Date.now(),
               };
               await saveGradeToFirestore(gradeObj);
+              await notifyUserIfAllowed({
+                targetUser: student,
+                category: "GRADE",
+                title: `📊 رصد درجة جديدة في ${viewingCourseGradeSheet.name}`,
+                content: `تم رصد درجتك في (${asm.name}): ${numericScore} من ${asm.maxScore}.`,
+                batchCode: effectiveBatchCode,
+                targetTab: Tab.GRADES,
+              });
             }
           }
         }
@@ -2583,6 +2732,19 @@ export default function App() {
         timestamp: Date.now(),
       };
       await saveGradeToFirestore(gradeData);
+      if (!existingGrade || existingGrade.score !== numericScore) {
+        const targetStudent = appUsers.find((u) => u.uid === studentId);
+        if (targetStudent) {
+          await notifyUserIfAllowed({
+            targetUser: targetStudent,
+            category: "GRADE",
+            title: `📊 رصد درجة جديدة في ${selectedCourseForGrading.name}`,
+            content: `تم رصد درجتك في (${selectedAssessmentForGrading.name}): ${numericScore} من ${selectedAssessmentForGrading.maxScore}.`,
+            batchCode: effectiveBatchCode,
+            targetTab: Tab.GRADES,
+          });
+        }
+      }
     }
 
     setIsEditingGrades(false);
@@ -2653,15 +2815,183 @@ export default function App() {
     }
   };
 
+  // --- Schedule-Linked Attendance Helpers ---
+  const getArabicDayFromDateStr = (dateStr: string): string => {
+    if (!dateStr) return "الأحد";
+    const parts = dateStr.split("-").map(Number);
+    const d =
+      parts.length === 3
+        ? new Date(parts[0], parts[1] - 1, parts[2])
+        : new Date(dateStr);
+    const map: Record<number, string> = {
+      0: "الأحد",
+      1: "الاثنين",
+      2: "الثلاثاء",
+      3: "الأربعاء",
+      4: "الخميس",
+      5: "الجمعة",
+      6: "السبت",
+    };
+    return map[d.getDay()] || "الأحد";
+  };
+
+  const getMostRecentDateForArabicDay = (arabicDay: string): string => {
+    const dayMap: Record<string, number> = {
+      "الأحد": 0,
+      "الاثنين": 1,
+      "الثلاثاء": 2,
+      "الأربعاء": 3,
+      "الخميس": 4,
+      "الجمعة": 5,
+      "السبت": 6,
+    };
+    const targetJsDay = dayMap[arabicDay];
+    const now = new Date();
+    if (targetJsDay === undefined) {
+      return now.toISOString().slice(0, 10);
+    }
+    const currentJsDay = now.getDay();
+    let diff = currentJsDay - targetJsDay;
+    if (diff < 0) diff += 7;
+    const targetDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff);
+    const yyyy = targetDate.getFullYear();
+    const mm = String(targetDate.getMonth() + 1).padStart(2, "0");
+    const dd = String(targetDate.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const parseScheduleTimeMinutes = (timeStr?: string): number => {
+    if (!timeStr) return 9999;
+    const clean = timeStr.trim();
+    const isPM = clean.includes("م") || clean.toLowerCase().includes("pm");
+    const isAM = clean.includes("ص") || clean.toLowerCase().includes("am");
+    const match = clean.match(/(\d{1,2}):(\d{2})/);
+    if (!match) return 9999;
+    let hours = parseInt(match[1], 10);
+    const mins = parseInt(match[2], 10);
+    if (isPM && hours < 12) hours += 12;
+    if (isAM && hours === 12) hours = 0;
+    if (!isPM && !isAM && hours >= 1 && hours <= 6) hours += 12;
+    return hours * 60 + mins;
+  };
+
+  const findMatchedCourseForSchedule = (sched: LectureSchedule): Course | undefined => {
+    return courses.find(
+      (c) =>
+        (sched.courseId && c.id === sched.courseId) ||
+        c.name.trim() === sched.courseName.trim()
+    );
+  };
+
+  const findExistingSessionForSchedule = (
+    sched: LectureSchedule,
+    dateStr: string
+  ): AttendanceSession | undefined => {
+    const matchedCourse = findMatchedCourseForSchedule(sched);
+    const effectiveCourseId = matchedCourse?.id || sched.courseId || sched.id;
+
+    return attendanceSessions.find((s) => {
+      if (s.date !== dateStr) return false;
+      if (s.scheduleId && s.scheduleId === sched.id) return true;
+      if (
+        s.courseId === effectiveCourseId &&
+        s.startTime &&
+        sched.startTime &&
+        s.startTime === sched.startTime
+      ) {
+        return true;
+      }
+      if (
+        s.courseId === effectiveCourseId &&
+        sched.startTime &&
+        s.title?.includes(sched.startTime)
+      ) {
+        return true;
+      }
+      return false;
+    });
+  };
+
+  const handleOpenOrCreateScheduledAttendance = async (
+    sched: LectureSchedule,
+    dateStr: string,
+    autoCopyFromSessionId?: string
+  ) => {
+    const targetDate = dateStr || new Date().toISOString().slice(0, 10);
+    setAttendanceTargetDate(targetDate);
+
+    const matchedCourse = findMatchedCourseForSchedule(sched);
+    const existing = findExistingSessionForSchedule(sched, targetDate);
+
+    if (existing) {
+      if (matchedCourse) {
+        setSelectedCourseForAttendance(matchedCourse);
+      }
+      setSelectedSessionId(existing.id);
+      setActiveTab(Tab.ATTENDANCE);
+      if (autoCopyFromSessionId) {
+        await handleCopyAttendanceFromSession(autoCopyFromSessionId, existing.id);
+      }
+      return;
+    }
+
+    const typeLabel = sched.lectureType === "PRACTICAL" ? "عملي" : "نظري";
+    const timePart = sched.startTime ? ` • ${sched.startTime}` : "";
+    const autoTitle = `${sched.courseName} (${typeLabel}${timePart})`;
+
+    const newSession: AttendanceSession = {
+      id: `session_${Date.now()}`,
+      batchCode: effectiveBatchCode,
+      courseId: matchedCourse?.id || sched.courseId || sched.id,
+      courseName: sched.courseName,
+      scheduleId: sched.id,
+      date: targetDate,
+      title: autoTitle,
+      startTime: sched.startTime,
+      endTime: sched.endTime,
+      hall: sched.hall,
+      lectureType: sched.lectureType || "THEORY",
+      createdBy: currentUser?.uid || "admin",
+      timestamp: Date.now(),
+    };
+
+    await saveAttendanceSessionToFirestore(newSession);
+    if (matchedCourse) {
+      setSelectedCourseForAttendance(matchedCourse);
+    }
+    setSelectedSessionId(newSession.id);
+    setActiveTab(Tab.ATTENDANCE);
+
+    if (autoCopyFromSessionId) {
+      await handleCopyAttendanceFromSession(autoCopyFromSessionId, newSession.id);
+    }
+  };
+
   const handleCreateSession = async (autoCopyFromSessionId?: string) => {
     if (!selectedCourseForAttendance || !newSessionDate) return;
+
+    const chosenSched = selectedScheduleSlotId
+      ? schedules.find((s) => s.id === selectedScheduleSlotId)
+      : undefined;
+
+    if (chosenSched) {
+      setIsAddingSession(false);
+      setSelectedScheduleSlotId("");
+      await handleOpenOrCreateScheduledAttendance(
+        chosenSched,
+        newSessionDate,
+        autoCopyFromSessionId
+      );
+      return;
+    }
 
     const newSession: AttendanceSession = {
       id: `session_${Date.now()}`,
       batchCode: effectiveBatchCode,
       courseId: selectedCourseForAttendance.id,
+      courseName: selectedCourseForAttendance.name,
       date: newSessionDate,
-      title: newSessionTitle || `محاضرة ${newSessionDate}`,
+      title: newSessionTitle || `محاضرة إضافية (${newSessionDate})`,
       createdBy: currentUser?.uid || "admin",
       timestamp: Date.now(),
     };
@@ -2673,6 +3003,7 @@ export default function App() {
     }
     setNewSessionDate(new Date().toISOString().slice(0, 10));
     setNewSessionTitle("");
+    setSelectedScheduleSlotId("");
     setIsAddingSession(false);
   };
 
@@ -2699,6 +3030,22 @@ export default function App() {
       timestamp: Date.now(),
     };
     await saveAttendanceRecordToFirestore(recData);
+
+    const targetStudent = appUsers.find((u) => u.uid === studentId);
+    if (targetStudent && (!existingRecord || existingRecord.status !== status)) {
+      const sessObj = attendanceSessions.find((s) => s.id === selectedSessionId);
+      const courseObj = courses.find((c) => c.id === sessObj?.courseId);
+      const statusAr =
+        status === "PRESENT" ? "حاضر ✅" : status === "EXCUSED" ? "مجاز 📝" : "غائب ❌";
+      await notifyUserIfAllowed({
+        targetUser: targetStudent,
+        category: "ATTENDANCE",
+        title: `✅ تسجيل حضورك في ${courseObj?.name || "المحاضرة"}`,
+        content: `تم تسجيل حالتك (${statusAr}) في ${sessObj?.title || "المحاضرة"} بتاريخ ${sessObj?.date || ""}.`,
+        batchCode: effectiveBatchCode,
+        targetTab: Tab.ATTENDANCE,
+      });
+    }
   };
 
   const handleBulkMarkAttendance = async (
@@ -2706,8 +3053,13 @@ export default function App() {
     targetStudents: User[]
   ) => {
     if (!selectedSessionId) return;
+    const sessObj = attendanceSessions.find((s) => s.id === selectedSessionId);
+    const courseObj = courses.find((c) => c.id === sessObj?.courseId);
+    const statusAr =
+      status === "PRESENT" ? "حاضر ✅" : status === "EXCUSED" ? "مجاز 📝" : "غائب ❌";
+
     await Promise.all(
-      targetStudents.map((student) => {
+      targetStudents.map(async (student) => {
         const existingRecord = attendanceRecords.find(
           (r) => r.sessionId === selectedSessionId && r.studentId === student.uid,
         );
@@ -2719,7 +3071,17 @@ export default function App() {
           status,
           timestamp: Date.now(),
         };
-        return saveAttendanceRecordToFirestore(recData);
+        await saveAttendanceRecordToFirestore(recData);
+        if (!existingRecord || existingRecord.status !== status) {
+          await notifyUserIfAllowed({
+            targetUser: student,
+            category: "ATTENDANCE",
+            title: `✅ تسجيل حضورك في ${courseObj?.name || "المحاضرة"}`,
+            content: `تم تسجيل حالتك (${statusAr}) في ${sessObj?.title || "المحاضرة"} بتاريخ ${sessObj?.date || ""}.`,
+            batchCode: effectiveBatchCode,
+            targetTab: Tab.ATTENDANCE,
+          });
+        }
       })
     );
   };
@@ -2804,6 +3166,17 @@ export default function App() {
         : {}),
     };
     await saveMaterialToFirestore(newMaterial);
+
+    await broadcastBatchNotification({
+      allUsers: appUsers,
+      batchCode: effectiveBatchCode,
+      excludeUid: currentUser?.uid,
+      category: "MATERIAL",
+      title: `📚 محاضرة جديدة في ${activeMatCourse.name}`,
+      content: `تم رفع (${newMatTitle}) ضمن قسم «${activeMatSection.title}».`,
+      targetTab: Tab.MATERIALS,
+    });
+
     setNewMatTitle("");
     setNewMatUrl("");
     setLastUploadedDriveInfo(null);
@@ -2868,6 +3241,17 @@ export default function App() {
       attachments: [],
     };
     await saveAnnouncementToFirestore(newAnnouncement);
+
+    await broadcastBatchNotification({
+      allUsers: appUsers,
+      batchCode: effectiveBatchCode,
+      excludeUid: currentUser.uid,
+      category: "ANNOUNCEMENT",
+      title: `📢 ${newAnnouncementPriority === "high" ? "تبليغ هام: " : "تبليغ جديد: "}${newAnnouncementTitle}`,
+      content: newAnnouncementContent.slice(0, 140),
+      targetTab: Tab.HOME,
+    });
+
     setIsAddingAnnouncement(false);
     setNewAnnouncementTitle("");
     setNewAnnouncementContent("");
@@ -2966,6 +3350,21 @@ export default function App() {
     };
 
     await saveProjectToFirestore(project);
+
+    if (!editingProject) {
+      await broadcastBatchNotification({
+        allUsers: appUsers,
+        batchCode: effectiveBatchCode,
+        excludeUid: currentUser?.uid,
+        category: "PROJECT",
+        title: `🚀 مشروع جديد في ${project.courseName}: ${project.title}`,
+        content: project.deadline
+          ? `تم طرح مشروع جديد. موعد التسليم: ${project.deadline}.`
+          : `تم طرح مشروع جديد لمادة (${project.courseName}).`,
+        targetTab: Tab.PROJECTS,
+      });
+    }
+
     setIsAddingProject(false);
     setEditingProject(null);
     setNewProjectTitle("");
@@ -3188,6 +3587,20 @@ export default function App() {
     };
 
     await saveProjectToFirestore(updatedProject);
+
+    if (newGroupMembers.length > 0) {
+      await broadcastBatchNotification({
+        allUsers: appUsers,
+        batchCode: effectiveBatchCode,
+        excludeUid: currentUser?.uid,
+        category: "PROJECT",
+        title: `🚀 كروب المشروع (${groupItem.name}) - ${targetProjectForGroup.title}`,
+        content: `تمت إضافتك أو تحديث مجموعتك (${groupItem.name}) في مشروع مادة ${targetProjectForGroup.courseName}.`,
+        targetTab: Tab.PROJECTS,
+        onlyUids: newGroupMembers,
+      });
+    }
+
     setIsAddingGroup(false);
     setTargetProjectForGroup(null);
     setEditingGroupId(null);
@@ -3313,6 +3726,26 @@ export default function App() {
 
     await saveAssignmentToFirestore(assignment);
 
+    const formattedDueShort = new Date(dueTimestamp).toLocaleString("ar-EG", {
+      weekday: "long",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    if (!editingAssignment) {
+      await broadcastBatchNotification({
+        allUsers: appUsers,
+        batchCode: effectiveBatchCode,
+        excludeUid: currentUser?.uid,
+        category: "ASSIGNMENT",
+        title: `📝 واجب جديد في ${assignment.courseName}: ${assignment.title}`,
+        content: `آخر موعد للتسليم: ${formattedDueShort}.`,
+        targetTab: Tab.ASSIGNMENTS,
+      });
+    }
+
     // If notification toggle was checked, automatically post to Announcements
     if (newAssignNotify && !editingAssignment && currentUser) {
       const formattedDue = new Date(dueTimestamp).toLocaleString("ar-EG", {
@@ -3370,21 +3803,23 @@ export default function App() {
 
   const handleSaveExam = async (exam: Exam) => {
     await saveExamToFirestore(exam);
-    // Send notification to batch students
-    const targetStudents = appUsers.filter(
-      (u) => u.batchCode === effectiveBatchCode && u.uid !== currentUser?.uid
-    );
-    for (const st of targetStudents) {
-      await saveNotificationToFirestore({
-        id: `notif_${Date.now()}_${st.uid.slice(0, 5)}`,
-        userId: st.uid,
-        title: `موعد امتحان جديد 🎓: ${exam.title}`,
-        content: `تم تحديد موعد امتحان لمادة (${exam.courseName}) بتاريخ ${new Date(exam.examTimestamp).toLocaleDateString('ar-IQ', { weekday: 'long', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}. شريط العد التنازلي يعمل الآن لمتابعة المتبقي.`,
-        timestamp: Date.now(),
-        isRead: false,
-        type: 'ANNOUNCEMENT',
-      });
-    }
+    await broadcastBatchNotification({
+      allUsers: appUsers,
+      batchCode: effectiveBatchCode,
+      excludeUid: currentUser?.uid,
+      category: "EXAM",
+      title: `🎓 موعد امتحان جديد: ${exam.title}`,
+      content: `تم تحديد موعد امتحان لمادة (${exam.courseName}) بتاريخ ${new Date(
+        exam.examTimestamp
+      ).toLocaleDateString("ar-IQ", {
+        weekday: "long",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })}.`,
+      targetTab: Tab.HOME,
+    });
   };
 
   const handleDeleteExam = async (id: string) => {
@@ -5380,6 +5815,23 @@ export default function App() {
   };
 
   const renderAttendance = () => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayStr = yesterdayDate.toISOString().slice(0, 10);
+
+    const targetArabicDay = getArabicDayFromDateStr(attendanceTargetDate);
+    const weekDaysList = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "السبت"];
+
+    // All batch students included in attendance statistics
+    const activeBatchStudents = appUsers.filter((u) => {
+      if (u.role === UserRole.OWNER) return false;
+      if (u.excludeFromStats) return false;
+      if (u.batchCode === effectiveBatchCode) return true;
+      if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode)) return true;
+      return false;
+    });
+
     // MANAGER VIEW (Representative, Admin, Owner)
     if (isManager) {
       if (selectedSessionId) {
@@ -5387,7 +5839,15 @@ export default function App() {
         const session = attendanceSessions.find(
           (s) => s.id === selectedSessionId,
         );
-        const course = courses.find((c) => c.id === session?.courseId);
+        const course = courses.find(
+          (c) =>
+            c.id === session?.courseId ||
+            (session?.courseName && c.name.trim() === session.courseName.trim())
+        );
+        const linkedSchedule = session?.scheduleId
+          ? schedules.find((sc) => sc.id === session.scheduleId)
+          : undefined;
+
         const records = attendanceRecords.filter(
           (r) => r.sessionId === selectedSessionId,
         );
@@ -5401,17 +5861,8 @@ export default function App() {
           (r) => r.status === "EXCUSED",
         ).length;
 
-        // All batch students: registered in this batch or official students (excluding excluded accounts)
-        const batchStudents = appUsers.filter((u) => {
-          if (u.role === UserRole.OWNER) return false;
-          if (u.excludeFromStats) return false;
-          if (u.batchCode === effectiveBatchCode) return true;
-          if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode)) return true;
-          return false;
-        });
-
         // Alphabetical sorting in Arabic
-        const sortedStudents = [...batchStudents].sort((a, b) =>
+        const sortedStudents = [...activeBatchStudents].sort((a, b) =>
           a.name.localeCompare(b.name, "ar", { sensitivity: "base" })
         );
 
@@ -5419,7 +5870,10 @@ export default function App() {
           s.name.toLowerCase().includes(attendanceSearchQuery.toLowerCase())
         );
 
-        const unrecordedCount = Math.max(0, sortedStudents.length - (presentCount + absentCount + excusedCount));
+        const unrecordedCount = Math.max(
+          0,
+          sortedStudents.length - (presentCount + absentCount + excusedCount)
+        );
 
         // Find previous sessions that have attendance records (prioritizing same-day lectures across any course!)
         const previousSessionsWithRecords = attendanceSessions
@@ -5443,11 +5897,17 @@ export default function App() {
         const isPrimarySameDay =
           primaryPrevSession && primaryPrevSession.date === session?.date;
 
+        const sessionStartTime = session?.startTime || linkedSchedule?.startTime;
+        const sessionEndTime = session?.endTime || linkedSchedule?.endTime;
+        const sessionHall = session?.hall || linkedSchedule?.hall;
+        const sessionLectureType =
+          session?.lectureType || linkedSchedule?.lectureType;
+
         return (
           <div className="space-y-6 p-4 pb-20 animate-in fade-in duration-200">
             {/* Session Top Bar */}
             <div className="bg-white dark:bg-slate-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
+              <div className="flex items-start sm:items-center gap-3">
                 <button
                   onClick={() => {
                     setSelectedSessionId(null);
@@ -5463,22 +5923,63 @@ export default function App() {
                   />
                 </button>
                 <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-lg md:text-xl font-bold text-gray-800 dark:text-white">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-lg md:text-xl font-black text-gray-800 dark:text-white">
                       {session?.title || "سجل الحضور"}
                     </h2>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                      {course?.name}
-                    </span>
+                    {(course?.name || session?.courseName) && (
+                      <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-primary/10 text-primary">
+                        {course?.name || session?.courseName}
+                      </span>
+                    )}
+                    {sessionLectureType && (
+                      <span
+                        className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                          sessionLectureType === "PRACTICAL"
+                            ? "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                            : "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+                        }`}
+                      >
+                        {sessionLectureType === "PRACTICAL"
+                          ? "عملي / مختبر 🔬"
+                          : "نظري 📖"}
+                      </span>
+                    )}
+                    {(session?.scheduleId || linkedSchedule) && (
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
+                        🔄 من الجدول الأسبوعي
+                      </span>
+                    )}
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 flex items-center gap-2">
-                    <Calendar size={13} className="text-gray-400" />
-                    <span>تاريخ المحاضرة: {session?.date}</span>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 flex flex-wrap items-center gap-2.5">
+                    <span className="flex items-center gap-1 font-bold text-gray-700 dark:text-gray-200">
+                      <Calendar size={13} className="text-primary" />
+                      {getArabicDayFromDateStr(session?.date || "")} ({session?.date})
+                    </span>
+                    {sessionStartTime && (
+                      <>
+                        <span>•</span>
+                        <span className="flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400">
+                          <Clock size={13} />
+                          {sessionStartTime}
+                          {sessionEndTime ? ` - ${sessionEndTime}` : ""}
+                        </span>
+                      </>
+                    )}
+                    {sessionHall && (
+                      <>
+                        <span>•</span>
+                        <span className="flex items-center gap-1 font-semibold text-amber-600 dark:text-amber-400">
+                          <MapPin size={13} />
+                          {sessionHall}
+                        </span>
+                      </>
+                    )}
                     <span>•</span>
                     <span className="font-bold text-gray-600 dark:text-gray-300">
-                      مرتبة أبجدياً ({sortedStudents.length} طالب مشمول بالإحصائيات)
+                      ({sortedStudents.length} طالب مشمول)
                     </span>
-                  </p>
+                  </div>
                 </div>
               </div>
 
@@ -5514,7 +6015,7 @@ export default function App() {
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-xs sm:text-sm font-black text-indigo-950 dark:text-indigo-200">
-                        تسجيل نفس غيابات المحاضرة السابقة بكبسة زر ⚡
+                        نسخ حضور وغيابات المحاضرة السابقة بكبسة زر ⚡
                       </h3>
                       {isPrimarySameDay && (
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">
@@ -5523,13 +6024,12 @@ export default function App() {
                       )}
                     </div>
                     <p className="text-[11px] text-indigo-700/80 dark:text-indigo-300/80 mt-0.5">
-                      وفّر وقتك إذا كانت هذه المحاضرة الثانية لنفس الدفعة، وانسخ حالات (حاضر / غائب / مجاز) بضغطة واحدة.
+                      وفّر وقتك إذا كانت هذه المحاضرة الثانية في جدول اليوم، وانسخ حالات (حاضر / غائب / مجاز) ثم عدّل فقط من تغيّر.
                     </p>
                   </div>
                 </div>
 
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
-                  {/* Direct 1-Click Button for the immediately preceding lecture */}
                   {primaryPrevSession && (
                     <button
                       type="button"
@@ -5553,7 +6053,6 @@ export default function App() {
                     </button>
                   )}
 
-                  {/* Dropdown selector if there are more previous lectures */}
                   {previousSessionsWithRecords.length > 1 && (
                     <div className="flex items-center gap-1.5">
                       <select
@@ -5576,7 +6075,7 @@ export default function App() {
                           return (
                             <option key={prevSess.id} value={prevSess.id}>
                               {prevSess.date === session?.date ? "📅 [نفس اليوم] " : ""}
-                              {c?.name || "مادة"} - {prevSess.title} ({prevSess.date}) [{count} طالب]
+                              {c?.name || prevSess.courseName || "مادة"} - {prevSess.title} ({prevSess.date}) [{count} طالب]
                             </option>
                           );
                         })}
@@ -5776,106 +6275,244 @@ export default function App() {
       }
 
       if (selectedCourseForAttendance) {
-        // View sessions for a course
-        const sessions = attendanceSessions.filter(
-          (s) => s.courseId === selectedCourseForAttendance.id,
-        );
+        // View sessions for a specific course + its scheduled slots
+        const sessions = attendanceSessions
+          .filter(
+            (s) =>
+              s.courseId === selectedCourseForAttendance.id ||
+              (s.courseName &&
+                s.courseName.trim() === selectedCourseForAttendance.name.trim())
+          )
+          .sort((a, b) => b.date.localeCompare(a.date));
+
+        const courseSchedules = schedules
+          .filter(
+            (sc) =>
+              sc.courseId === selectedCourseForAttendance.id ||
+              sc.courseName.trim() === selectedCourseForAttendance.name.trim()
+          )
+          .sort(
+            (a, b) =>
+              parseScheduleTimeMinutes(a.startTime) -
+              parseScheduleTimeMinutes(b.startTime)
+          );
 
         return (
-          <div className="space-y-6 p-4">
-            <div className="flex justify-between items-center mb-6">
+          <div className="space-y-6 p-4 pb-20">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-slate-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700">
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => setSelectedCourseForAttendance(null)}
-                  className="p-2 bg-white dark:bg-slate-800 rounded-xl shadow-sm hover:bg-gray-50 dark:hover:bg-slate-700 transition"
+                  className="p-2.5 bg-gray-100 dark:bg-slate-700 rounded-2xl hover:bg-gray-200 dark:hover:bg-slate-600 transition"
                 >
                   <ChevronLeft
                     size={20}
                     className="rtl:rotate-180 text-gray-600 dark:text-gray-300"
                   />
                 </button>
-                <h2 className="text-xl font-bold text-gray-800 dark:text-white">
-                  سجلات الحضور: {selectedCourseForAttendance.name}
-                </h2>
+                <div>
+                  <h2 className="text-xl font-black text-gray-800 dark:text-white">
+                    سجلات حضور مادة: {selectedCourseForAttendance.name}
+                  </h2>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    سجّل الحضور مباشرة من مواعيد المادة في الجدول الأسبوعي أو أضف محاضرة تعويضية.
+                  </p>
+                </div>
               </div>
               <button
-                onClick={() => setIsAddingSession(true)}
-                className="bg-primary text-white px-4 py-2 rounded-xl text-sm font-bold shadow-lg shadow-primary/30 hover:bg-primary/90 transition flex items-center gap-2"
+                onClick={() => {
+                  setNewSessionDate(attendanceTargetDate || todayStr);
+                  setSelectedScheduleSlotId(courseSchedules[0]?.id || "");
+                  setIsAddingSession(true);
+                }}
+                className="bg-primary text-white px-4 py-2.5 rounded-2xl text-xs font-black shadow-lg shadow-primary/30 hover:bg-primary/90 transition flex items-center justify-center gap-2 shrink-0"
               >
-                <Plus size={18} />
-                محاضرة جديدة
+                <Plus size={16} />
+                <span>تسجيل محاضرة أو تعويضية</span>
               </button>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {sessions.map((session) => {
-                const records = attendanceRecords.filter(
-                  (r) => r.sessionId === session.id,
-                );
-                const presentCount = records.filter(
-                  (r) => r.status === "PRESENT",
-                ).length;
-                const studentsCount = appUsers.filter((u) => {
-                  if (u.role === UserRole.OWNER) return false;
-                  if (u.excludeFromStats) return false;
-                  if (u.batchCode === effectiveBatchCode) return true;
-                  if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode)) return true;
-                  return false;
-                }).length;
-
-                return (
-                  <div
-                    key={session.id}
-                    className="bg-white dark:bg-slate-800 p-5 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 hover:shadow-md transition cursor-pointer group"
-                    onClick={() => setSelectedSessionId(session.id)}
-                  >
-                    <div className="flex justify-between items-start mb-3">
-                      <div className="p-3 bg-primary/10 text-primary rounded-xl">
-                        <CalendarCheck size={24} />
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteSession(session.id);
-                        }}
-                        className="text-gray-300 hover:text-red-500 transition"
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
-                    <h3 className="font-bold text-gray-800 dark:text-white text-lg">
-                      {session.title}
+            {/* Course's Weekly Schedule Slots for Instant Attendance */}
+            {courseSchedules.length > 0 && (
+              <div className="bg-gradient-to-br from-indigo-50/80 via-blue-50/50 to-white dark:from-slate-800 dark:via-slate-800 dark:to-slate-800/90 p-5 rounded-3xl border border-indigo-100 dark:border-slate-700 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-black text-sm text-indigo-950 dark:text-white flex items-center gap-2">
+                      <Clock size={17} className="text-indigo-600" />
+                      <span>مواعيد هذه المادة الثابتة في الجدول الأسبوعي ({courseSchedules.length})</span>
                     </h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                      {session.date}
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      اضغط على أي موعد لفتح أو إنشاء سجل الحضور الخاص به فوراً دون كتابة يدوية.
                     </p>
-                    <div className="w-full bg-gray-100 dark:bg-slate-700 rounded-full h-2 mb-2 overflow-hidden">
-                      <div
-                        className="bg-green-500 h-full rounded-full"
-                        style={{
-                          width: `${studentsCount > 0 ? (presentCount / studentsCount) * 100 : 0}%`,
-                        }}
-                      ></div>
-                    </div>
-                    <div className="flex justify-between text-xs font-bold">
-                      <span className="text-green-600">
-                        {presentCount} حاضر
-                      </span>
-                      <span className="text-gray-400">
-                        {studentsCount} طالب
-                      </span>
-                    </div>
                   </div>
-                );
-              })}
-              {sessions.length === 0 && (
-                <div className="col-span-full text-center py-12 text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-gray-100 dark:border-slate-700 border-dashed">
-                  لا توجد محاضرات مسجلة لهذا الكورس.
                 </div>
-              )}
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  {courseSchedules.map((sched) => {
+                    const mostRecentDate = getMostRecentDateForArabicDay(sched.day);
+                    const existingSess = findExistingSessionForSchedule(
+                      sched,
+                      mostRecentDate
+                    );
+                    const existingRecords = existingSess
+                      ? attendanceRecords.filter((r) => r.sessionId === existingSess.id)
+                      : [];
+                    const presCount = existingRecords.filter(
+                      (r) => r.status === "PRESENT"
+                    ).length;
+
+                    return (
+                      <div
+                        key={sched.id}
+                        className="bg-white dark:bg-slate-900/70 p-4 rounded-2xl border border-indigo-100/80 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="bg-primary/10 text-primary text-xs font-black px-2.5 py-0.5 rounded-lg">
+                              يوم {sched.day}
+                            </span>
+                            <span className="text-xs font-black text-gray-800 dark:text-white flex items-center gap-1">
+                              <Clock size={12} className="text-indigo-500" />
+                              {sched.startTime}
+                              {sched.endTime ? ` - ${sched.endTime}` : ""}
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-lg ${
+                                sched.lectureType === "PRACTICAL"
+                                  ? "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                                  : "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+                              }`}
+                            >
+                              {sched.lectureType === "PRACTICAL" ? "عملي 🔬" : "نظري 📖"}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                            أقرب تاريخ للمحاضرة: <strong className="font-mono">{mostRecentDate}</strong>
+                            {sched.hall ? ` • القاعة: ${sched.hall}` : ""}
+                          </p>
+                          {existingSess && (
+                            <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-bold">
+                              ✅ تم تسجيل الحضور ({presCount} حاضر من {activeBatchStudents.length})
+                            </p>
+                          )}
+                        </div>
+
+                        <button
+                          onClick={() =>
+                            handleOpenOrCreateScheduledAttendance(sched, mostRecentDate)
+                          }
+                          className={`px-4 py-2.5 rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 shrink-0 active:scale-95 ${
+                            existingSess
+                              ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-500/20"
+                              : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-500/20"
+                          }`}
+                        >
+                          <CalendarCheck size={15} />
+                          <span>
+                            {existingSess ? "فتح وتعديل الحضور" : "تسجيل الحضور الآن"}
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Recorded Sessions Grid */}
+            <div>
+              <h3 className="font-black text-sm text-gray-700 dark:text-gray-200 mb-3 px-1">
+                أرشيف المحاضرات المسجلة لهذه المادة ({sessions.length})
+              </h3>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {sessions.map((session) => {
+                  const records = attendanceRecords.filter(
+                    (r) => r.sessionId === session.id,
+                  );
+                  const presentCount = records.filter(
+                    (r) => r.status === "PRESENT",
+                  ).length;
+                  const absentCount = records.filter(
+                    (r) => r.status === "ABSENT",
+                  ).length;
+                  const excusedCount = records.filter(
+                    (r) => r.status === "EXCUSED",
+                  ).length;
+                  const studentsCount = activeBatchStudents.length;
+
+                  return (
+                    <div
+                      key={session.id}
+                      className="bg-white dark:bg-slate-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 hover:shadow-md transition cursor-pointer group"
+                      onClick={() => setSelectedSessionId(session.id)}
+                    >
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2.5 bg-primary/10 text-primary rounded-xl">
+                            <CalendarCheck size={22} />
+                          </div>
+                          <div>
+                            <span className="text-[11px] font-bold text-gray-400 block">
+                              {getArabicDayFromDateStr(session.date)} • {session.date}
+                            </span>
+                            {session.startTime && (
+                              <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">
+                                ⏰ {session.startTime}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteSession(session.id);
+                          }}
+                          className="text-gray-300 hover:text-red-500 transition p-1"
+                          title="حذف سجل المحاضرة"
+                        >
+                          <Trash2 size={17} />
+                        </button>
+                      </div>
+                      <h3 className="font-bold text-gray-800 dark:text-white text-base mb-1">
+                        {session.title}
+                      </h3>
+                      <div className="flex items-center gap-2 text-[11px] font-bold mb-3">
+                        <span className="text-emerald-600">حاضر: {presentCount}</span>
+                        <span>•</span>
+                        <span className="text-red-500">غائب: {absentCount}</span>
+                        <span>•</span>
+                        <span className="text-amber-600">مجاز: {excusedCount}</span>
+                      </div>
+                      <div className="w-full bg-gray-100 dark:bg-slate-700 rounded-full h-2 mb-2 overflow-hidden">
+                        <div
+                          className="bg-emerald-500 h-full rounded-full transition-all"
+                          style={{
+                            width: `${studentsCount > 0 ? (presentCount / studentsCount) * 100 : 0}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="flex justify-between text-xs font-bold">
+                        <span className="text-emerald-600">
+                          {studentsCount > 0
+                            ? `${Math.round((presentCount / studentsCount) * 100)}% نسبة الحضور`
+                            : "0%"}
+                        </span>
+                        <span className="text-gray-400">
+                          من أصل {studentsCount} طالب
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+                {sessions.length === 0 && (
+                  <div className="col-span-full text-center py-12 text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-gray-100 dark:border-slate-700 border-dashed">
+                    لا توجد محاضرات مسجلة في أرشيف هذه المادة بعد. اضغط على موعد المحاضرة أعلاه لبدء التسجيل.
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* Add Session Modal */}
+            {/* Add Session Modal (Supports picking from Schedule OR Extra Makeup Lecture) */}
             {isAddingSession && (() => {
               const candidateSessions = attendanceSessions
                 .filter((s) => attendanceRecords.some((r) => r.sessionId === s.id))
@@ -5892,33 +6529,59 @@ export default function App() {
               return (
                 <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                   <div className="bg-white dark:bg-slate-800 w-full max-w-md rounded-3xl shadow-2xl p-6 animate-in zoom-in-95">
-                    <h3 className="font-bold text-lg text-gray-800 dark:text-white mb-4">
-                      تسجيل محاضرة جديدة ({selectedCourseForAttendance.name})
+                    <h3 className="font-black text-lg text-gray-800 dark:text-white mb-1">
+                      تسجيل حضور ({selectedCourseForAttendance.name})
                     </h3>
+                    <p className="text-xs text-gray-400 mb-4">
+                      اختر موعد المحاضرة من الجدول أو أنشئ محاضرة تعويضية إضافية
+                    </p>
                     <div className="space-y-4">
                       <div>
-                        <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                          تاريخ المحاضرة
+                        <label className="text-xs font-bold text-gray-600 dark:text-gray-300 mb-1 block">
+                          تاريخ المحاضرة ({getArabicDayFromDateStr(newSessionDate)})
                         </label>
                         <input
                           type="date"
                           value={newSessionDate}
                           onChange={(e) => setNewSessionDate(e.target.value)}
-                          className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-2 text-sm outline-none"
+                          className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-2.5 text-sm outline-none"
                         />
                       </div>
-                      <div>
-                        <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
-                          عنوان المحاضرة (اختياري)
-                        </label>
-                        <input
-                          type="text"
-                          value={newSessionTitle}
-                          onChange={(e) => setNewSessionTitle(e.target.value)}
-                          placeholder="مثال: المحاضرة الثانية"
-                          className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-2 text-sm outline-none"
-                        />
-                      </div>
+
+                      {courseSchedules.length > 0 && (
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 dark:text-gray-300 mb-1.5 block">
+                            ربط بموعد المحاضرة في الجدول الأسبوعي
+                          </label>
+                          <select
+                            value={selectedScheduleSlotId}
+                            onChange={(e) => setSelectedScheduleSlotId(e.target.value)}
+                            className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3.5 py-2.5 text-xs font-bold outline-none cursor-pointer"
+                          >
+                            <option value="">➕ محاضرة إضافية / تعويضية (خارج الجدول)</option>
+                            {courseSchedules.map((sc) => (
+                              <option key={sc.id} value={sc.id}>
+                                📅 يوم {sc.day} • {sc.startTime} ({sc.lectureType === "PRACTICAL" ? "عملي" : "نظري"})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {!selectedScheduleSlotId && (
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 dark:text-gray-300 mb-1 block">
+                            عنوان المحاضرة الإضافية (اختياري)
+                          </label>
+                          <input
+                            type="text"
+                            value={newSessionTitle}
+                            onChange={(e) => setNewSessionTitle(e.target.value)}
+                            placeholder="مثال: محاضرة تعويضية"
+                            className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-2.5 text-sm outline-none"
+                          />
+                        </div>
+                      )}
 
                       {topCandidate && (
                         <div className="p-3.5 bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/50 rounded-2xl space-y-2">
@@ -5933,7 +6596,7 @@ export default function App() {
                           >
                             <Sparkles size={14} />
                             <span>
-                              إنشاء ونسخ غيابات ({topCandidateCourse?.name ? `${topCandidateCourse.name} - ` : ""}{topCandidate.title})
+                              فتح ونسخ غيابات ({topCandidateCourse?.name ? `${topCandidateCourse.name} - ` : ""}{topCandidate.title})
                             </span>
                           </button>
                         </div>
@@ -5950,7 +6613,7 @@ export default function App() {
                           onClick={() => handleCreateSession()}
                           className="flex-1 bg-primary text-white py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-primary/30"
                         >
-                          إنشاء محاضرة فارغة
+                          {selectedScheduleSlotId ? "فتح كشف محاضرة الجدول" : "إنشاء محاضرة إضافية"}
                         </button>
                       </div>
                     </div>
@@ -5962,27 +6625,45 @@ export default function App() {
         );
       }
 
-      // Select Course View
-      const batchStudentsForReports = appUsers
-        .filter((u) => {
-          if (u.role === UserRole.OWNER) return false;
-          if (u.excludeFromStats) return false;
-          if (u.batchCode === effectiveBatchCode) return true;
-          if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode)) return true;
-          return false;
-        })
-        .sort((a, b) => a.name.localeCompare(b.name, "ar", { sensitivity: "base" }));
+      // Main Attendance Hub: Driven by Weekly Schedule!
+      const batchStudentsForReports = [...activeBatchStudents].sort((a, b) =>
+        a.name.localeCompare(b.name, "ar", { sensitivity: "base" })
+      );
+
+      // Scheduled lectures for the currently selected target date's weekday
+      const scheduledForTargetDay = schedules
+        .filter((s) => s.day === targetArabicDay)
+        .sort(
+          (a, b) =>
+            parseScheduleTimeMinutes(a.startTime) -
+            parseScheduleTimeMinutes(b.startTime)
+        );
+
+      // Find any recorded session on `attendanceTargetDate` so subsequent lectures can copy from it with 1 click!
+      const sameDayRecordedSessions = attendanceSessions
+        .filter(
+          (s) =>
+            s.date === attendanceTargetDate &&
+            attendanceRecords.some((r) => r.sessionId === s.id)
+        )
+        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
       return (
         <div className="space-y-6 p-4 pb-20">
+          {/* Top Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-slate-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700">
             <div>
-              <h2 className="text-xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                <CalendarCheck className="text-primary" size={24} />
-                إدارة الحضور والغياب
-              </h2>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-xl font-black text-gray-800 dark:text-white flex items-center gap-2">
+                  <CalendarCheck className="text-primary" size={24} />
+                  إدارة الحضور والغياب الذكية (مرتبطة بالجدول)
+                </h2>
+                <span className="bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50 text-[11px] font-black px-2.5 py-0.5 rounded-full">
+                  تلقائي من الجدول الأسبوعي 🔄
+                </span>
+              </div>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                اختر المادة لتسجيل المحاضرات، أو استخرج تقارير حضور شهرية وفصلية بصيغة PDF لأي طالب.
+                محاضرات الجدول الأسبوعي جاهزة أمامك تلقائياً حسب اليوم والوقت لتسجيل الحضور بضغطة واحدة دون إعادة كتابتها.
               </p>
             </div>
             {currentUser && (
@@ -6000,32 +6681,388 @@ export default function App() {
             )}
           </div>
 
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {courses.map((course) => (
-              <div
-                key={course.id}
-                onClick={() => setSelectedCourseForAttendance(course)}
-                className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 hover:shadow-md transition cursor-pointer group"
-              >
-                <div className="flex items-center gap-4 mb-4">
-                  <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-900/20 text-indigo-500 flex items-center justify-center group-hover:scale-110 transition">
-                    <BookOpen size={24} />
+          {/* PRIMARY HUB: Today's / Selected Day's Scheduled Lectures Ready for Attendance */}
+          <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-indigo-100 dark:border-slate-700 overflow-hidden">
+            {/* Date & Weekday Bar */}
+            <div className="p-5 bg-gradient-to-r from-indigo-600 via-blue-600 to-violet-600 text-white">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <span className="bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5">
+                      <Calendar size={13} />
+                      <span>يوم {targetArabicDay}</span>
+                      <span>•</span>
+                      <span className="font-mono">{attendanceTargetDate}</span>
+                    </span>
+                    {attendanceTargetDate === todayStr && (
+                      <span className="bg-emerald-400 text-slate-950 px-2.5 py-0.5 rounded-full text-[11px] font-black">
+                        محاضرات اليوم 📍
+                      </span>
+                    )}
+                    {attendanceTargetDate === yesterdayStr && (
+                      <span className="bg-amber-300 text-slate-950 px-2.5 py-0.5 rounded-full text-[11px] font-black">
+                        محاضرات أمس ⏪
+                      </span>
+                    )}
                   </div>
-                  <div>
-                    <h3 className="font-bold text-gray-800 dark:text-white text-lg">
-                      {course.name}
-                    </h3>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {course.code}
-                    </p>
-                  </div>
+                  <h3 className="text-lg sm:text-xl font-black">
+                    محاضرات يوم {targetArabicDay} في الجدول الأسبوعي ({scheduledForTargetDay.length})
+                  </h3>
+                  <p className="text-xs text-blue-100 mt-0.5">
+                    اضغط على «تسجيل الحضور الآن» أمام أي محاضرة لفتح كشف أسماء الطلاب مباشرة.
+                  </p>
                 </div>
-                <div className="flex justify-between items-center text-sm font-bold text-gray-400 group-hover:text-primary transition">
-                  <span>عرض السجلات</span>
-                  <ArrowRight size={18} className="rtl:rotate-180" />
+
+                {/* Date Picker & Quick Today/Yesterday Buttons */}
+                <div className="flex flex-wrap items-center gap-2 self-start lg:self-center">
+                  <button
+                    type="button"
+                    onClick={() => setAttendanceTargetDate(todayStr)}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black transition ${
+                      attendanceTargetDate === todayStr
+                        ? "bg-white text-indigo-700 shadow-md"
+                        : "bg-white/15 hover:bg-white/25 text-white"
+                    }`}
+                  >
+                    اليوم ({getArabicDayFromDateStr(todayStr)})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAttendanceTargetDate(yesterdayStr)}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black transition ${
+                      attendanceTargetDate === yesterdayStr
+                        ? "bg-white text-indigo-700 shadow-md"
+                        : "bg-white/15 hover:bg-white/25 text-white"
+                    }`}
+                  >
+                    أمس ({getArabicDayFromDateStr(yesterdayStr)})
+                  </button>
+                  <div className="relative flex items-center bg-white/15 hover:bg-white/25 rounded-xl px-3 py-1.5 border border-white/25">
+                    <span className="text-[11px] font-bold ml-2 text-blue-100">
+                      تاريخ آخر:
+                    </span>
+                    <input
+                      type="date"
+                      value={attendanceTargetDate}
+                      onChange={(e) => {
+                        if (e.target.value) setAttendanceTargetDate(e.target.value);
+                      }}
+                      className="bg-transparent text-white text-xs font-bold outline-none cursor-pointer"
+                    />
+                  </div>
                 </div>
               </div>
-            ))}
+
+              {/* Quick Weekday Switcher Pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar mt-4 pt-3 border-t border-white/15">
+                <span className="text-[11px] font-bold text-blue-100 ml-1 shrink-0">
+                  أيام الجدول:
+                </span>
+                {weekDaysList.map((dayName) => {
+                  const dayCount = schedules.filter((s) => s.day === dayName).length;
+                  const isSelectedDay = targetArabicDay === dayName;
+                  return (
+                    <button
+                      key={dayName}
+                      type="button"
+                      onClick={() =>
+                        setAttendanceTargetDate(getMostRecentDateForArabicDay(dayName))
+                      }
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 ${
+                        isSelectedDay
+                          ? "bg-white text-indigo-700 shadow-sm font-black"
+                          : "bg-white/10 hover:bg-white/20 text-white"
+                      }`}
+                    >
+                      <span>{dayName}</span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                          isSelectedDay
+                            ? "bg-indigo-100 text-indigo-700"
+                            : "bg-black/20 text-white"
+                        }`}
+                      >
+                        {dayCount}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Scheduled Lectures List for Target Day */}
+            <div className="p-5">
+              {scheduledForTargetDay.length === 0 ? (
+                <div className="text-center py-10 px-4 bg-gray-50/70 dark:bg-slate-900/40 rounded-2xl border border-dashed border-gray-200 dark:border-slate-700">
+                  <Calendar size={40} className="mx-auto mb-2 text-gray-300 dark:text-slate-600" />
+                  <p className="font-bold text-gray-700 dark:text-gray-300 text-sm">
+                    لا توجد محاضرات مضافة في الجدول الأسبوعي ليوم {targetArabicDay}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1 mb-4">
+                    يمكنك اختيار يوم آخر من الشريط أعلاه أو إضافة محاضرات يوم {targetArabicDay} في قسم الجدول.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSchedFilterDay(targetArabicDay);
+                      setActiveTab(Tab.SCHEDULE);
+                    }}
+                    className="px-4 py-2 bg-primary text-white rounded-xl text-xs font-bold shadow-sm hover:bg-primary/90 transition inline-flex items-center gap-1.5"
+                  >
+                    <Plus size={15} />
+                    <span>إدارة جدول يوم {targetArabicDay}</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {scheduledForTargetDay.map((sched, idx) => {
+                    const existingSession = findExistingSessionForSchedule(
+                      sched,
+                      attendanceTargetDate
+                    );
+                    const sessionRecords = existingSession
+                      ? attendanceRecords.filter(
+                          (r) => r.sessionId === existingSession.id
+                        )
+                      : [];
+                    const presentCount = sessionRecords.filter(
+                      (r) => r.status === "PRESENT"
+                    ).length;
+                    const absentCount = sessionRecords.filter(
+                      (r) => r.status === "ABSENT"
+                    ).length;
+                    const excusedCount = sessionRecords.filter(
+                      (r) => r.status === "EXCUSED"
+                    ).length;
+                    const isRecorded =
+                      existingSession !== undefined && sessionRecords.length > 0;
+
+                    // Check if there is another session recorded on the same day that we can copy from with 1 click
+                    const earlierSameDaySession = sameDayRecordedSessions.find(
+                      (s) => s.id !== existingSession?.id
+                    );
+                    const earlierCourse = courses.find(
+                      (c) => c.id === earlierSameDaySession?.courseId
+                    );
+
+                    return (
+                      <div
+                        key={sched.id}
+                        className={`p-5 rounded-3xl border transition-all flex flex-col justify-between gap-4 ${
+                          sched.isCancelled
+                            ? "bg-red-50/30 dark:bg-red-950/10 border-red-200 dark:border-red-900/40 opacity-75"
+                            : isRecorded
+                            ? "bg-emerald-50/30 dark:bg-emerald-950/15 border-emerald-200 dark:border-emerald-800/60 shadow-xs"
+                            : "bg-gray-50/60 dark:bg-slate-900/50 border-gray-200/80 dark:border-slate-700 hover:border-primary/40 hover:shadow-md"
+                        }`}
+                      >
+                        <div>
+                          {/* Top Row: Sequence + Time + Type + Status */}
+                          <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="bg-indigo-600 text-white text-[11px] font-black px-2.5 py-1 rounded-xl">
+                                المحاضرة #{idx + 1}
+                              </span>
+                              <span className="bg-white dark:bg-slate-800 text-primary border border-primary/20 text-xs font-black px-3 py-1 rounded-xl flex items-center gap-1 shadow-2xs">
+                                <Clock size={13} />
+                                {sched.startTime}
+                                {sched.endTime ? ` - ${sched.endTime}` : ""}
+                              </span>
+                              <span
+                                className={`text-[10px] font-bold px-2.5 py-1 rounded-xl ${
+                                  sched.lectureType === "PRACTICAL"
+                                    ? "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                                    : "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+                                }`}
+                              >
+                                {sched.lectureType === "PRACTICAL"
+                                  ? "عملي / مختبر 🔬"
+                                  : "نظري 📖"}
+                              </span>
+                            </div>
+
+                            {sched.isCancelled ? (
+                              <span className="bg-red-500 text-white text-[10px] font-black px-2.5 py-1 rounded-full">
+                                ❌ ملغاة هذا الأسبوع
+                              </span>
+                            ) : isRecorded ? (
+                              <span className="bg-emerald-500 text-white text-[10px] font-black px-2.5 py-1 rounded-full flex items-center gap-1">
+                                <CheckCircle2 size={12} />
+                                تم رصد الحضور
+                              </span>
+                            ) : (
+                              <span className="bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 text-[10px] font-black px-2.5 py-1 rounded-full">
+                                ⏳ بانتظار التحضير
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Course Title & Details */}
+                          <h4 className="font-black text-base sm:text-lg text-gray-800 dark:text-white mb-1">
+                            {sched.courseName}
+                          </h4>
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+                            {sched.professor && (
+                              <span className="flex items-center gap-1">
+                                <UserIcon size={13} className="text-primary" />
+                                {sched.professor}
+                              </span>
+                            )}
+                            {sched.hall && (
+                              <span className="flex items-center gap-1 font-semibold text-amber-700 dark:text-amber-400">
+                                <MapPin size={13} />
+                                {sched.hall}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Live Attendance Stats if already started/recorded */}
+                          {existingSession && (
+                            <div className="mt-3 pt-3 border-t border-gray-200/60 dark:border-slate-700/60">
+                              <div className="flex items-center justify-between text-xs font-bold mb-1.5">
+                                <div className="flex items-center gap-2.5">
+                                  <span className="text-emerald-600">
+                                    حاضر: {presentCount}
+                                  </span>
+                                  <span>•</span>
+                                  <span className="text-red-500">
+                                    غائب: {absentCount}
+                                  </span>
+                                  <span>•</span>
+                                  <span className="text-amber-600">
+                                    مجاز: {excusedCount}
+                                  </span>
+                                </div>
+                                <span className="text-gray-400 text-[11px]">
+                                  {sessionRecords.length} / {activeBatchStudents.length} طالب
+                                </span>
+                              </div>
+                              <div className="w-full h-2 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-emerald-500 rounded-full transition-all"
+                                  style={{
+                                    width: `${
+                                      activeBatchStudents.length > 0
+                                        ? (presentCount / activeBatchStudents.length) * 100
+                                        : 0
+                                    }%`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleOpenOrCreateScheduledAttendance(
+                                sched,
+                                attendanceTargetDate
+                              )
+                            }
+                            className={`flex-1 py-2.5 px-4 rounded-2xl text-xs font-black transition flex items-center justify-center gap-2 shadow-sm active:scale-95 ${
+                              isRecorded
+                                ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20"
+                                : "bg-primary hover:bg-primary/90 text-white shadow-primary/25"
+                            }`}
+                          >
+                            <CalendarCheck size={16} />
+                            <span>
+                              {existingSession
+                                ? "فتح وتعديل كشف الحضور ✅"
+                                : "تسجيل حضور هذه المحاضرة 📋"}
+                            </span>
+                          </button>
+
+                          {/* 1-Click Copy from Earlier Same-Day Lecture */}
+                          {!isRecorded && earlierSameDaySession && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleOpenOrCreateScheduledAttendance(
+                                  sched,
+                                  attendanceTargetDate,
+                                  earlierSameDaySession.id
+                                )
+                              }
+                              className="py-2.5 px-3.5 bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-950/70 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-2xl text-[11px] font-black transition flex items-center justify-center gap-1.5 active:scale-95"
+                              title="فتح هذه المحاضرة ونسخ حضور المحاضرة السابقة بنفس اليوم"
+                            >
+                              <Sparkles size={14} />
+                              <span>
+                                نسخ من ({earlierCourse?.name || earlierSameDaySession.courseName || "المحاضرة السابقة"})
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Courses Archive & Extra Lectures Section */}
+          <div>
+            <div className="flex items-center justify-between mb-3 px-1">
+              <div>
+                <h3 className="font-black text-base text-gray-800 dark:text-white">
+                  أرشيف وسجلات المواد الدراسية 📚
+                </h3>
+                <p className="text-xs text-gray-400">
+                  اضغط على أي مادة لمراجعة أرشيف المحاضرات السابقة أو إضافة محاضرة تعويضية إضافية
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {courses.map((course) => {
+                const courseSessCount = attendanceSessions.filter(
+                  (s) =>
+                    s.courseId === course.id ||
+                    (s.courseName && s.courseName.trim() === course.name.trim())
+                ).length;
+                const courseSchedCount = schedules.filter(
+                  (sc) =>
+                    sc.courseId === course.id ||
+                    sc.courseName.trim() === course.name.trim()
+                ).length;
+
+                return (
+                  <div
+                    key={course.id}
+                    onClick={() => setSelectedCourseForAttendance(course)}
+                    className="bg-white dark:bg-slate-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 hover:shadow-md transition cursor-pointer group flex flex-col justify-between"
+                  >
+                    <div className="flex items-center gap-3.5 mb-4">
+                      <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-900/20 text-indigo-500 flex items-center justify-center group-hover:scale-110 transition shrink-0">
+                        <BookOpen size={24} />
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="font-bold text-gray-800 dark:text-white text-base truncate">
+                          {course.name}
+                        </h3>
+                        <div className="flex items-center gap-2 text-[11px] text-gray-400 mt-0.5">
+                          <span>{courseSessCount} محاضرة مسجلة</span>
+                          <span>•</span>
+                          <span className="text-indigo-500 font-bold">
+                            {courseSchedCount} موعد أسبوعي
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center text-xs font-bold text-gray-400 group-hover:text-primary pt-3 border-t border-gray-50 dark:border-slate-700/50 transition">
+                      <span>عرض الأرشيف ومواعيد المادة</span>
+                      <ArrowRight size={16} className="rtl:rotate-180" />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           {/* Student PDF Attendance Reports Directory for Representative */}
@@ -6112,12 +7149,12 @@ export default function App() {
     // Student View
     else {
       return (
-        <div className="space-y-6 p-4">
+        <div className="space-y-6 p-4 pb-20">
           <div className="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-3xl p-6 text-white shadow-xl shadow-emerald-200 dark:shadow-none relative overflow-hidden mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="relative z-10">
-              <h2 className="text-2xl font-bold mb-2">سجل الحضور 📅</h2>
+              <h2 className="text-2xl font-bold mb-2">سجل الحضور والمحاضرات 📅</h2>
               <p className="opacity-90 text-sm">
-                احرص على حضور المحاضرات بانتظام لتجنب الحرمان، ويمكنك تحميل تقرير حضورك الشهري أو الفصلي بصيغة PDF.
+                تابع حضورك في محاضرات الجدول الأسبوعي لكل مادة، ويمكنك تحميل تقرير حضورك الشهري أو الفصلي بصيغة PDF.
               </p>
             </div>
             {currentUser && (
@@ -6133,9 +7170,14 @@ export default function App() {
 
           <div className="grid gap-6 md:grid-cols-2">
             {courses.map((course) => {
-              const courseSessions = attendanceSessions.filter(
-                (s) => s.courseId === course.id,
-              );
+              const courseSessions = attendanceSessions
+                .filter(
+                  (s) =>
+                    s.courseId === course.id ||
+                    (s.courseName && s.courseName.trim() === course.name.trim())
+                )
+                .sort((a, b) => b.date.localeCompare(a.date));
+
               const studentRecords = attendanceRecords.filter(
                 (r) =>
                   courseSessions.some((s) => s.id === r.sessionId) &&
@@ -6155,55 +7197,110 @@ export default function App() {
 
               const attendancePercentage =
                 totalSessions > 0
-                  ? Math.round((presentCount / totalSessions) * 100)
+                  ? Math.round(((presentCount + excusedCount) / totalSessions) * 100)
                   : 100;
 
               return (
                 <div
                   key={course.id}
-                  className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700"
+                  className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 flex flex-col justify-between"
                 >
-                  <div className="flex justify-between items-start mb-6">
-                    <div>
-                      <h3 className="font-bold text-gray-800 dark:text-white text-lg">
-                        {course.name}
-                      </h3>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        {course.code}
-                      </p>
+                  <div>
+                    <div className="flex justify-between items-start mb-5">
+                      <div>
+                        <h3 className="font-bold text-gray-800 dark:text-white text-lg">
+                          {course.name}
+                        </h3>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                          {course.professors?.join("، ") || course.code || "مادة دراسية"}
+                        </p>
+                      </div>
+                      <div
+                        className={`px-3 py-1 rounded-full text-xs font-bold ${
+                          attendancePercentage >= 75
+                            ? "bg-green-100 text-green-600"
+                            : "bg-red-100 text-red-600"
+                        }`}
+                      >
+                        {attendancePercentage}% التزام
+                      </div>
                     </div>
-                    <div
-                      className={`px-3 py-1 rounded-full text-xs font-bold ${attendancePercentage >= 75 ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"}`}
-                    >
-                      {attendancePercentage}% حضور
-                    </div>
-                  </div>
 
-                  <div className="grid grid-cols-4 gap-2 mb-4">
-                    <div className="text-center p-3 bg-gray-50 dark:bg-slate-700/50 rounded-2xl">
-                      <span className="block text-xl font-bold text-gray-800 dark:text-white">
-                        {totalSessions}
-                      </span>
-                      <span className="text-[10px] text-gray-400">محاضرة</span>
+                    <div className="grid grid-cols-4 gap-2 mb-4">
+                      <div className="text-center p-3 bg-gray-50 dark:bg-slate-700/50 rounded-2xl">
+                        <span className="block text-xl font-bold text-gray-800 dark:text-white">
+                          {totalSessions}
+                        </span>
+                        <span className="text-[10px] text-gray-400">محاضرة</span>
+                      </div>
+                      <div className="text-center p-3 bg-emerald-50 dark:bg-emerald-900/10 rounded-2xl">
+                        <span className="block text-xl font-bold text-emerald-600">
+                          {presentCount}
+                        </span>
+                        <span className="text-[10px] text-emerald-500 font-bold">حاضر</span>
+                      </div>
+                      <div className="text-center p-3 bg-red-50 dark:bg-red-900/10 rounded-2xl">
+                        <span className="block text-xl font-bold text-red-600">
+                          {absentCount}
+                        </span>
+                        <span className="text-[10px] text-red-500 font-bold">غائب</span>
+                      </div>
+                      <div className="text-center p-3 bg-amber-50 dark:bg-amber-900/10 rounded-2xl">
+                        <span className="block text-xl font-bold text-amber-600">
+                          {excusedCount}
+                        </span>
+                        <span className="text-[10px] text-amber-500 font-bold">مجاز</span>
+                      </div>
                     </div>
-                    <div className="text-center p-3 bg-emerald-50 dark:bg-emerald-900/10 rounded-2xl">
-                      <span className="block text-xl font-bold text-emerald-600">
-                        {presentCount}
-                      </span>
-                      <span className="text-[10px] text-emerald-500 font-bold">حاضر</span>
-                    </div>
-                    <div className="text-center p-3 bg-red-50 dark:bg-red-900/10 rounded-2xl">
-                      <span className="block text-xl font-bold text-red-600">
-                        {absentCount}
-                      </span>
-                      <span className="text-[10px] text-red-500 font-bold">غائب</span>
-                    </div>
-                    <div className="text-center p-3 bg-amber-50 dark:bg-amber-900/10 rounded-2xl">
-                      <span className="block text-xl font-bold text-amber-600">
-                        {excusedCount}
-                      </span>
-                      <span className="text-[10px] text-amber-500 font-bold">مجاز</span>
-                    </div>
+
+                    {/* Recent Recorded Sessions for this Student */}
+                    {courseSessions.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-gray-100 dark:border-slate-700 space-y-1.5 max-h-44 overflow-y-auto no-scrollbar">
+                        <span className="text-[11px] font-bold text-gray-400 block mb-1">
+                          سجل محاضرات المادة:
+                        </span>
+                        {courseSessions.map((sess) => {
+                          const myRec = studentRecords.find(
+                            (r) => r.sessionId === sess.id
+                          );
+                          return (
+                            <div
+                              key={sess.id}
+                              className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-xl bg-gray-50/80 dark:bg-slate-700/40"
+                            >
+                              <div className="min-w-0 pr-1">
+                                <span className="font-bold text-gray-700 dark:text-gray-200 block truncate">
+                                  {sess.title || `محاضرة ${sess.date}`}
+                                </span>
+                                <span className="text-[10px] text-gray-400">
+                                  {getArabicDayFromDateStr(sess.date)} ({sess.date})
+                                  {sess.startTime ? ` • ${sess.startTime}` : ""}
+                                </span>
+                              </div>
+                              <span
+                                className={`text-[10px] font-black px-2.5 py-0.5 rounded-lg shrink-0 ${
+                                  myRec?.status === "PRESENT"
+                                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
+                                    : myRec?.status === "ABSENT"
+                                    ? "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300"
+                                    : myRec?.status === "EXCUSED"
+                                    ? "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
+                                    : "bg-gray-200 text-gray-600 dark:bg-slate-600 dark:text-gray-300"
+                                }`}
+                              >
+                                {myRec?.status === "PRESENT"
+                                  ? "حاضر ✅"
+                                  : myRec?.status === "ABSENT"
+                                  ? "غائب ❌"
+                                  : myRec?.status === "EXCUSED"
+                                  ? "مجاز 📝"
+                                  : "قيد الرصد"}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -7856,7 +8953,28 @@ export default function App() {
 
                           {/* Manager Actions */}
                           {isManager && (
-                            <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+                            <div className="flex items-center gap-1.5 flex-wrap self-end sm:self-center shrink-0">
+                              {!item.isCancelled && (() => {
+                                const targetDateForSlot = getMostRecentDateForArabicDay(item.day);
+                                const existingSess = findExistingSessionForSchedule(item, targetDateForSlot);
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleOpenOrCreateScheduledAttendance(item, targetDateForSlot)
+                                    }
+                                    className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-xs active:scale-95 ${
+                                      existingSess
+                                        ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                                        : "bg-indigo-600 hover:bg-indigo-700 text-white"
+                                    }`}
+                                    title="فتح سجل حضور هذه المحاضرة مباشرة"
+                                  >
+                                    <CalendarCheck size={14} />
+                                    <span>{existingSess ? "تعديل الحضور ✅" : "تسجيل الحضور 📋"}</span>
+                                  </button>
+                                );
+                              })()}
                               <button
                                 onClick={() => handleToggleCancelSchedule(item)}
                                 className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
@@ -7960,7 +9078,28 @@ export default function App() {
                   </div>
 
                   {isManager && (
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 flex-wrap justify-end">
+                      {!item.isCancelled && (() => {
+                        const targetDateForSlot = getMostRecentDateForArabicDay(item.day);
+                        const existingSess = findExistingSessionForSchedule(item, targetDateForSlot);
+                        return (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleOpenOrCreateScheduledAttendance(item, targetDateForSlot)
+                            }
+                            className={`px-3 py-1.5 rounded-xl text-xs font-black transition flex items-center gap-1 shadow-xs active:scale-95 ${
+                              existingSess
+                                ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                                : "bg-indigo-600 hover:bg-indigo-700 text-white"
+                            }`}
+                            title="فتح سجل حضور هذه المحاضرة مباشرة"
+                          >
+                            <CalendarCheck size={14} />
+                            <span>{existingSess ? "تعديل الحضور" : "تسجيل الحضور"}</span>
+                          </button>
+                        );
+                      })()}
                       <button
                         onClick={() => handleToggleCancelSchedule(item)}
                         title={item.isCancelled ? "استئناف المحاضرة" : "إلغاء المحاضرة مؤقتاً"}
@@ -11752,6 +12891,14 @@ export default function App() {
           </div>
         )}
 
+        {/* Smart Customizable Notification Preferences Card (Only for own profile) */}
+        {isOwnProfile && currentUser && (
+          <NotificationPreferencesCard
+            currentUser={currentUser}
+            onUpdateUser={(updated) => setCurrentUser(updated)}
+          />
+        )}
+
         {/* Representative Management Card - Exclusive to System Owner (ahmed) */}
         {isOwnProfile && isOwner && (
           <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 p-6 space-y-4">
@@ -11927,6 +13074,8 @@ export default function App() {
     !currentUser.batchCode &&
     !isStealthMode;
 
+  const unreadNotifsCount = notifications.filter((n) => !n.isRead).length;
+
   return (
     <Layout
       activeTab={activeTab}
@@ -11934,6 +13083,8 @@ export default function App() {
       user={currentUser}
       onLogout={handleLogout}
       onOpenRepModal={isOwner ? () => setIsRepManagerOpen(true) : undefined}
+      onOpenNotifications={() => setIsNotificationCenterOpen(true)}
+      unreadNotificationsCount={unreadNotifsCount}
       joinRequestsCount={joinRequests.length}
     >
       {showLanding ? (
@@ -11967,6 +13118,7 @@ export default function App() {
           {activeTab === Tab.SUMMARIES && (
             <StudentSummariesHub
               currentUser={currentUser}
+              allUsers={appUsers}
               courses={courses}
               summaries={studentSummaries}
               effectiveBatchCode={effectiveBatchCode || ""}
@@ -11980,6 +13132,7 @@ export default function App() {
           {activeTab === Tab.SUGGESTIONS && (
             <BatchSuggestionsBox
               currentUser={currentUser}
+              allUsers={appUsers}
               courses={courses}
               suggestions={batchSuggestions}
               effectiveBatchCode={effectiveBatchCode || ""}
@@ -11995,6 +13148,61 @@ export default function App() {
           {activeTab === Tab.REQUESTS && renderJoinRequests()}
           {activeTab === Tab.PROFILE && renderProfile()}
         </>
+      )}
+
+      {/* Notification Center Modal */}
+      <NotificationCenterModal
+        isOpen={isNotificationCenterOpen}
+        onClose={() => setIsNotificationCenterOpen(false)}
+        notifications={notifications}
+        onNavigateTab={(tab) => setActiveTab(tab)}
+        onOpenSettings={() => {
+          setViewingUserProfile(null);
+          setActiveTab(Tab.PROFILE);
+        }}
+      />
+
+      {/* Live Real-Time Toast Notification Banner */}
+      {liveToastNotif && (
+        <div className="fixed top-4 left-4 right-4 sm:left-auto sm:right-6 sm:w-96 z-50 animate-in slide-in-from-top-5 duration-300">
+          <div className="bg-white dark:bg-slate-800 border-2 border-primary/40 rounded-3xl shadow-2xl p-4 flex items-start gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-primary text-white flex items-center justify-center shrink-0 shadow-md shadow-primary/30">
+              <Bell size={20} className="animate-bounce" />
+            </div>
+            <div
+              className="flex-1 min-w-0 cursor-pointer"
+              onClick={async () => {
+                await markNotificationAsReadInFirestore(liveToastNotif.id);
+                if (liveToastNotif.targetTab) {
+                  setActiveTab(liveToastNotif.targetTab);
+                } else {
+                  setIsNotificationCenterOpen(true);
+                }
+                setLiveToastNotif(null);
+              }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-black text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+                  إشعار فوري جديد 🔔
+                </span>
+                <span className="text-[10px] text-gray-400">الآن</span>
+              </div>
+              <h4 className="font-bold text-xs sm:text-sm text-gray-900 dark:text-white mt-1 truncate">
+                {liveToastNotif.title || "تنبيه جديد في دفعتي"}
+              </h4>
+              <p className="text-xs text-gray-600 dark:text-gray-300 line-clamp-2 mt-0.5 leading-relaxed">
+                {liveToastNotif.content}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLiveToastNotif(null)}
+              className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 transition shrink-0"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
       )}
 
       <RepresentativeManagerModal

@@ -30,15 +30,21 @@ import {
   SuggestionCategory,
   SuggestionStatus,
   Announcement,
+  Tab,
 } from "../types";
 import {
   saveBatchSuggestionToFirestore,
   deleteBatchSuggestionFromFirestore,
   saveAnnouncementToFirestore,
 } from "../services/firebase";
+import {
+  notifyUserIfAllowed,
+  broadcastBatchNotification,
+} from "../services/notificationService";
 
 interface BatchSuggestionsBoxProps {
   currentUser: User | null;
+  allUsers?: User[];
   courses: Course[];
   suggestions: BatchSuggestion[];
   effectiveBatchCode: string;
@@ -84,6 +90,7 @@ const SUGGESTION_CATEGORIES: {
 
 export const BatchSuggestionsBox: React.FC<BatchSuggestionsBoxProps> = ({
   currentUser,
+  allUsers = [],
   courses,
   suggestions,
   effectiveBatchCode,
@@ -158,6 +165,26 @@ export const BatchSuggestionsBox: React.FC<BatchSuggestionsBoxProps> = ({
       };
 
       await saveBatchSuggestionToFirestore(item);
+
+      // Notify batch representative(s) if a student submitted a suggestion
+      const reps = allUsers.filter(
+        (u) =>
+          (u.role === UserRole.REPRESENTATIVE ||
+            u.role === UserRole.ASSISTANT_REP) &&
+          u.batchCode === effectiveBatchCode &&
+          u.uid !== currentUser.uid
+      );
+      for (const rep of reps) {
+        await notifyUserIfAllowed({
+          targetUser: rep,
+          category: "SUGGESTION",
+          title: `📬 مقترح جديد في صندوق الدفعة: ${item.title}`,
+          content: `تم طرح مقترح/استفسار جديد بواسطة (${item.authorName}). يمكنك مراجعته والرد عليه.`,
+          batchCode: effectiveBatchCode,
+          targetTab: Tab.SUGGESTIONS,
+        });
+      }
+
       setIsAddModalOpen(false);
     } catch (err) {
       console.error("Failed to create suggestion:", err);
@@ -229,6 +256,22 @@ export const BatchSuggestionsBox: React.FC<BatchSuggestionsBoxProps> = ({
             }
           : {}),
       });
+
+      // Notify suggestion author if they have notifications enabled for suggestions
+      const authorUser = allUsers.find((u) => u.uid === sug.authorUid);
+      if (authorUser && authorUser.uid !== currentUser.uid) {
+        await notifyUserIfAllowed({
+          targetUser: authorUser,
+          category: "SUGGESTION",
+          title: `💬 رد الممثل على مقترحك: ${sug.title}`,
+          content: replyDraft.trim()
+            ? `رد الممثل (${currentUser.name}): "${replyDraft.trim()}"`
+            : `قام الممثل بتحديث حالة مقترحك في صندوق الدفعة.`,
+          batchCode: effectiveBatchCode,
+          targetTab: Tab.SUGGESTIONS,
+        });
+      }
+
       setReplyingToId(null);
     } catch (err) {
       console.error("Error saving rep reply:", err);
@@ -271,6 +314,15 @@ export const BatchSuggestionsBox: React.FC<BatchSuggestionsBoxProps> = ({
       await saveBatchSuggestionToFirestore({
         ...sug,
         status: "CONVERTED",
+      });
+      await broadcastBatchNotification({
+        allUsers,
+        batchCode: effectiveBatchCode,
+        excludeUid: currentUser.uid,
+        category: "ANNOUNCEMENT",
+        title: newAnn.title,
+        content: `تم تحويل المقترح «${sug.title}» ونتيجة تصويت الطلاب (${upPct}% مؤيد) إلى تبليغ رسمي للدفعة.`,
+        targetTab: Tab.HOME,
       });
       alert("تم تحويل المقترح ونتيجة التصويت إلى تبليغ رسمي في الصفحة الرئيسية بنجاح! 📢");
     } catch (err) {

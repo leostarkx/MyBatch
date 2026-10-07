@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Tab, UserRole, User } from '../types';
-import { Home, BookOpen, GraduationCap, MessageSquare, User as UserIcon, LogOut, Users, CalendarCheck, UserPlus, Layers, CheckSquare, Crown, Trophy, FileText, Inbox, Phone, Send, Instagram, X, Copy, Check, ExternalLink } from 'lucide-react';
+import { Home, BookOpen, GraduationCap, MessageSquare, User as UserIcon, LogOut, Users, CalendarCheck, UserPlus, Layers, CheckSquare, Crown, Trophy, FileText, Inbox, Phone, Send, Instagram, X, Copy, Check, ExternalLink, Bell } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 import { BatchLogo } from './BatchLogo';
 
@@ -12,6 +12,8 @@ interface LayoutProps {
   onLogout: () => void;
   onOpenDriveModal?: () => void;
   onOpenRepModal?: () => void;
+  onOpenNotifications?: () => void;
+  unreadNotificationsCount?: number;
   joinRequestsCount?: number;
 }
 
@@ -23,6 +25,8 @@ const Layout: React.FC<LayoutProps> = ({
   onLogout,
   onOpenDriveModal,
   onOpenRepModal,
+  onOpenNotifications,
+  unreadNotificationsCount = 0,
   joinRequestsCount = 0,
 }) => {
   const [isDevContactOpen, setIsDevContactOpen] = useState(false);
@@ -81,7 +85,7 @@ const Layout: React.FC<LayoutProps> = ({
             className="w-11 h-11 hover:scale-110 transition-transform duration-300"
             showBackground
           />
-          <div>
+          <div className="flex-1 min-w-0">
             <h1 className="text-xl font-bold text-gray-800 dark:text-white">دفعتي</h1>
             <p className="text-xs text-gray-500 dark:text-gray-400">
               تم التطوير بواسطة{" "}
@@ -94,6 +98,21 @@ const Layout: React.FC<LayoutProps> = ({
               </button>
             </p>
           </div>
+          {onOpenNotifications && (
+            <button
+              type="button"
+              onClick={onOpenNotifications}
+              className="relative p-2.5 rounded-2xl bg-gray-100 dark:bg-slate-700/80 text-gray-700 dark:text-gray-200 hover:bg-primary/10 hover:text-primary transition shrink-0 cursor-pointer"
+              title="مركز الإشعارات والتنبيهات"
+            >
+              <Bell size={20} />
+              {unreadNotificationsCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-red-500 text-white rounded-full text-[10px] font-black flex items-center justify-center border-2 border-white dark:border-slate-800 animate-pulse">
+                  {unreadNotificationsCount > 9 ? '+9' : unreadNotificationsCount}
+                </span>
+              )}
+            </button>
+          )}
         </div>
 
         <nav className="flex-1 p-4 space-y-2 overflow-y-auto no-scrollbar">
@@ -195,6 +214,21 @@ const Layout: React.FC<LayoutProps> = ({
              </div>
           </div>
           <div className="flex items-center gap-1.5">
+            {onOpenNotifications && (
+              <button
+                type="button"
+                onClick={onOpenNotifications}
+                className="relative p-2 rounded-xl bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-200 hover:bg-primary/10 hover:text-primary transition"
+                title="الإشعارات"
+              >
+                <Bell size={18} />
+                {unreadNotificationsCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 bg-red-500 text-white rounded-full text-[9px] font-black flex items-center justify-center border border-white dark:border-slate-800 animate-pulse">
+                    {unreadNotificationsCount > 9 ? '+9' : unreadNotificationsCount}
+                  </span>
+                )}
+              </button>
+            )}
             <PWAInstallButton compact />
             {onOpenRepModal && (
               <button

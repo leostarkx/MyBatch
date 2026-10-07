@@ -539,6 +539,26 @@ export async function saveNotificationToFirestore(notif: Notification) {
 export async function markNotificationAsReadInFirestore(id: string) {
   await setDoc(doc(db, 'notifications', id), { isRead: true }, { merge: true });
 }
+export async function deleteNotificationFromFirestore(id: string) {
+  await deleteDoc(doc(db, 'notifications', id));
+}
+export async function markAllNotificationsReadInFirestore(notifications: Notification[]) {
+  const unread = notifications.filter((n) => !n.isRead);
+  if (unread.length === 0) return;
+  const batch = writeBatch(db);
+  unread.forEach((n) => {
+    batch.set(doc(db, 'notifications', n.id), { isRead: true }, { merge: true });
+  });
+  await batch.commit();
+}
+export async function clearAllNotificationsInFirestore(notifications: Notification[]) {
+  if (notifications.length === 0) return;
+  const batch = writeBatch(db);
+  notifications.forEach((n) => {
+    batch.delete(doc(db, 'notifications', n.id));
+  });
+  await batch.commit();
+}
 
 // Representative Codes & Appointment Management
 export function subscribeRepresentativeCodes(callback: (codes: RepresentativeCode[]) => void) {
