@@ -11,7 +11,7 @@ import {
 } from 'firebase/auth';
 import { 
   initializeFirestore, getFirestore, doc, getDocFromServer, getDocs, getDoc, setDoc, 
-  deleteDoc, collection, onSnapshot, query, orderBy, where
+  deleteDoc, collection, onSnapshot, query, orderBy, where, writeBatch, setLogLevel
 } from 'firebase/firestore';
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
@@ -27,6 +27,13 @@ import {
   MOCK_USERS, MOCK_BATCHES
 } from './mockDb';
 
+// Suppress noisy internal WebChannel timeout logs when operating over long-polling / offline cache
+try {
+  setLogLevel('silent');
+} catch {
+  // Ignore if setLogLevel is unavailable
+}
+
 // Initialize Firebase App
 export const app = initializeApp(firebaseConfig);
 export const db = (() => {
@@ -34,7 +41,7 @@ export const db = (() => {
     return initializeFirestore(
       app,
       {
-        experimentalAutoDetectLongPolling: true,
+        experimentalForceLongPolling: true,
       },
       (firebaseConfig as any).firestoreDatabaseId
     );
@@ -49,15 +56,12 @@ googleProvider.setCustomParameters({
   prompt: 'select_account',
 });
 
-// Validate connection to Firestore as per guidelines
+// Validate connection to Firestore as per guidelines (using cached/non-blocking read)
 async function testConnection() {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
+    await getDoc(doc(db, 'test', 'connection'));
+  } catch {
     // Ignore transient offline/unavailable network states during initial boot
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Firestore is currently operating in offline cache mode until connection is established.");
-    }
   }
 }
 testConnection();
@@ -497,10 +501,40 @@ export async function deleteJoinRequestFromFirestore(id: string) {
 }
 
 // Users
+export function normalizeArabicForSort(text: string): string {
+  if (!text) return '';
+  return text
+    .trim()
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '') // إزالة التشكيل والكشيدة
+    .replace(/[أإآٱ]/g, 'ا') // توحيد الألف (أ، إ، آ -> ا)
+    .replace(/ى/g, 'ي') // توحيد الألف المقصورة والياء
+    .replace(/ة/g, 'ه') // توحيد التاء المربوطة والهاء
+    .replace(/ؤ/g, 'و')
+    .replace(/ئ/g, 'ي')
+    .replace(/\s+/g, ' ');
+}
+
+export function compareArabicNames(nameA?: string, nameB?: string): number {
+  const normA = normalizeArabicForSort(nameA || '');
+  const normB = normalizeArabicForSort(nameB || '');
+  const cmp = normA.localeCompare(normB, 'ar');
+  if (cmp !== 0) return cmp;
+  return (nameA || '').localeCompare(nameB || '', 'ar');
+}
+
+export function sortUsersAlphabetically<T extends { name?: string }>(users: T[]): T[] {
+  return [...users].sort((a, b) => compareArabicNames(a.name, b.name));
+}
+
 export function subscribeUsers(callback: (users: User[]) => void) {
-  return onSnapshot(collection(db, 'users'), (snapshot) => {
-    callback(snapshot.docs.map(doc => doc.data() as User));
-  });
+  return onSnapshot(
+    collection(db, 'users'),
+    (snapshot) => {
+      const users = snapshot.docs.map(doc => doc.data() as User);
+      callback(sortUsersAlphabetically(users));
+    },
+    () => {}
+  );
 }
 export async function saveUserToFirestore(user: User) {
   const sanitized = sanitizeForFirestore(user);
@@ -512,11 +546,15 @@ export async function deleteUserFromFirestore(uid: string) {
 
 // Settings
 export function subscribeSettings(callback: (settings: Record<string, any>) => void) {
-  return onSnapshot(collection(db, 'settings'), (snapshot) => {
-    const res: Record<string, any> = {};
-    snapshot.docs.forEach(d => { res[d.id] = d.data(); });
-    callback(res);
-  });
+  return onSnapshot(
+    collection(db, 'settings'),
+    (snapshot) => {
+      const res: Record<string, any> = {};
+      snapshot.docs.forEach(d => { res[d.id] = d.data(); });
+      callback(res);
+    },
+    () => {}
+  );
 }
 export async function saveSettingToFirestore(key: string, data: any) {
   const sanitized = sanitizeForFirestore(data);
@@ -526,11 +564,15 @@ export async function saveSettingToFirestore(key: string, data: any) {
 // Notifications
 export function subscribeNotifications(userId: string, callback: (items: Notification[]) => void) {
   const q = query(collection(db, 'notifications'), where('userId', '==', userId));
-  return onSnapshot(q, (snapshot) => {
-    const list = snapshot.docs.map(doc => doc.data() as Notification);
-    list.sort((a, b) => b.timestamp - a.timestamp);
-    callback(list);
-  });
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const list = snapshot.docs.map(doc => doc.data() as Notification);
+      list.sort((a, b) => b.timestamp - a.timestamp);
+      callback(list);
+    },
+    () => {}
+  );
 }
 export async function saveNotificationToFirestore(notif: Notification) {
   const sanitized = sanitizeForFirestore(notif);

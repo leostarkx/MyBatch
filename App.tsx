@@ -232,6 +232,8 @@ import {
   transferRepresentation,
   dismissRepresentative,
   resetEntireSystemDataToProduction,
+  compareArabicNames,
+  sortUsersAlphabetically,
 } from "./services/firebase";
 
 // --- Theme Selector ---
@@ -633,7 +635,9 @@ export default function App() {
   }, []);
 
   // Real Data State (from Mock DB)
-  const [appUsers, setAppUsers] = useState<User[]>(MOCK_USERS);
+  const [appUsers, setAppUsers] = useState<User[]>(() =>
+    sortUsersAlphabetically(MOCK_USERS)
+  );
   const [announcements, setAnnouncements] =
     useState<Announcement[]>(MOCK_ANNOUNCEMENTS);
   const [notifications, setNotifications] =
@@ -698,9 +702,11 @@ export default function App() {
   const [schedEndTime, setSchedEndTime] = useState("10:30 ص");
   const [schedHall, setSchedHall] = useState("");
   const [schedLectureType, setSchedLectureType] = useState<"THEORY" | "PRACTICAL">("THEORY");
+  const [schedTargetGroup, setSchedTargetGroup] = useState<string>("ALL");
   const [schedIsWeekly, setSchedIsWeekly] = useState(true);
   const [schedNote, setSchedNote] = useState("");
   const [schedFilterDay, setSchedFilterDay] = useState("الكل");
+  const [schedFilterGroup, setSchedFilterGroup] = useState("الكل");
   const [scheduleViewMode, setScheduleViewMode] = useState<"WEEKLY_GRID" | "CARDS">("WEEKLY_GRID");
 
   // --- UI States ---
@@ -870,10 +876,22 @@ export default function App() {
     new Date().toISOString().slice(0, 10)
   );
   const [selectedScheduleSlotId, setSelectedScheduleSlotId] = useState<string>("");
+  const [newSessionTargetGroup, setNewSessionTargetGroup] = useState<string>("ALL");
+  const [attendanceGroupFilter, setAttendanceGroupFilter] = useState<string>("DEFAULT");
+  const [isAddingExceptionModalOpen, setIsAddingExceptionModalOpen] = useState<boolean>(false);
+  const [exceptionStudentId, setExceptionStudentId] = useState<string>("");
+  const [exceptionSwappedWithId, setExceptionSwappedWithId] = useState<string>("");
+  const [exceptionNote, setExceptionNote] = useState<string>("");
+  const [exceptionStatus, setExceptionStatus] = useState<"PRESENT" | "EXCUSED">("PRESENT");
+  const [exceptionSearchQuery, setExceptionSearchQuery] = useState<string>("");
 
   // Student Management State (Admin)
   const [newStudentName, setNewStudentName] = useState("");
+  const [newStudentGroup, setNewStudentGroup] = useState("");
   const [studentStatsFilter, setStudentStatsFilter] = useState<'ALL' | 'INCLUDED' | 'EXCLUDED'>('ALL');
+  const [studentGroupFilter, setStudentGroupFilter] = useState<string>("ALL");
+  const [newCustomGroupName, setNewCustomGroupName] = useState<string>("");
+  const [isManagingAcademicGroups, setIsManagingAcademicGroups] = useState<boolean>(false);
   const [studentDirectorySearch, setStudentDirectorySearch] = useState("");
   const [linkingTargetAccount, setLinkingTargetAccount] = useState<User | null>(null);
   const [linkingSourceOfficialUid, setLinkingSourceOfficialUid] = useState("");
@@ -1231,6 +1249,109 @@ export default function App() {
     }
   };
 
+  // --- Academic Groups Helpers & Handlers ---
+  const DEFAULT_ACADEMIC_GROUPS = ["كروب A", "كروب B", "كروب C", "كروب D"];
+
+  const currentBatchObj = batches.find((b) => b.code === effectiveBatchCode);
+
+  // Compute all unique academic groups available in the active batch
+  const batchAcademicGroups: string[] = Array.from(
+    new Set([
+      ...(currentBatchObj?.academicGroups && currentBatchObj.academicGroups.length > 0
+        ? currentBatchObj.academicGroups
+        : DEFAULT_ACADEMIC_GROUPS),
+      ...appUsers
+        .filter((u) => u.batchCode === effectiveBatchCode && u.academicGroup)
+        .map((u) => u.academicGroup as string),
+      ...schedules
+        .filter((s) => s.targetGroup && s.targetGroup !== "ALL")
+        .map((s) => s.targetGroup as string),
+      ...attendanceSessions
+        .filter((s) => s.targetGroup && s.targetGroup !== "ALL")
+        .map((s) => s.targetGroup as string),
+    ])
+  );
+
+  const handleAddBatchAcademicGroup = async () => {
+    const clean = newCustomGroupName.trim();
+    if (!clean || !currentBatchObj) return;
+    const formatted = clean.startsWith("كروب") ? clean : `كروب ${clean}`;
+    const existing =
+      currentBatchObj.academicGroups && currentBatchObj.academicGroups.length > 0
+        ? currentBatchObj.academicGroups
+        : DEFAULT_ACADEMIC_GROUPS;
+    if (existing.includes(formatted)) {
+      setNewCustomGroupName("");
+      return;
+    }
+    const updatedGroups = [...existing, formatted];
+    await saveBatchToFirestore({
+      ...currentBatchObj,
+      academicGroups: updatedGroups,
+    });
+    setNewCustomGroupName("");
+  };
+
+  const handleRemoveBatchAcademicGroup = async (groupName: string) => {
+    if (!currentBatchObj) return;
+    const existing =
+      currentBatchObj.academicGroups && currentBatchObj.academicGroups.length > 0
+        ? currentBatchObj.academicGroups
+        : DEFAULT_ACADEMIC_GROUPS;
+    const updatedGroups = existing.filter((g) => g !== groupName);
+    await saveBatchToFirestore({
+      ...currentBatchObj,
+      academicGroups: updatedGroups,
+    });
+  };
+
+  const handleAssignStudentAcademicGroup = async (student: User, groupName: string) => {
+    if (!isManager) return;
+    const updatedStudent: User = {
+      ...student,
+      academicGroup: groupName || "",
+    };
+    await saveUserToFirestore(updatedStudent);
+    if (currentUser?.uid === student.uid) {
+      setCurrentUser(updatedStudent);
+    }
+  };
+
+  const handleAutoDistributeStudentsIntoGroups = async (groupsToUse: string[]) => {
+    if (!isManager || groupsToUse.length === 0) return;
+    const eligibleStudents = appUsers
+      .filter((u) => {
+        if (u.role === UserRole.OWNER) return false;
+        if (u.excludeFromStats) return false;
+        if (u.batchCode === effectiveBatchCode) return true;
+        if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode)) return true;
+        return false;
+      })
+      .sort((a, b) => compareArabicNames(a.name, b.name));
+
+    if (eligibleStudents.length === 0) return;
+    if (
+      !confirm(
+        `هل تريد توزيع طلاب الدفعة (${eligibleStudents.length} طالب) بالتساوي وبحسب الترتيب الأبجدي على (${groupsToUse.join(
+          " ، "
+        )})؟`
+      )
+    )
+      return;
+
+    const chunkSize = Math.ceil(eligibleStudents.length / groupsToUse.length);
+    await Promise.all(
+      eligibleStudents.map((st, idx) => {
+        const gIndex = Math.min(groupsToUse.length - 1, Math.floor(idx / chunkSize));
+        const targetGrp = groupsToUse[gIndex];
+        return saveUserToFirestore({
+          ...st,
+          academicGroup: targetGrp,
+        });
+      })
+    );
+  };
+
   // Add Official Student (DB Record for Grades & Attendance)
   const handleAddStudent = async () => {
     if (!newStudentName.trim()) return;
@@ -1241,6 +1362,7 @@ export default function App() {
       username: `student_${Date.now()}`,
       role: UserRole.STUDENT,
       batchCode: effectiveBatchCode,
+      ...(newStudentGroup ? { academicGroup: newStudentGroup } : {}),
       isOfficial: true,
       excludeFromStats: false,
       avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(newStudentName.trim())}&background=random`,
@@ -1474,6 +1596,7 @@ export default function App() {
     setSchedEndTime("10:30 ص");
     setSchedHall("");
     setSchedLectureType("THEORY");
+    setSchedTargetGroup("ALL");
     setSchedIsWeekly(true);
     setSchedNote("");
     setIsAddingSchedule(true);
@@ -1503,6 +1626,7 @@ export default function App() {
       endTime: schedEndTime.trim() || "",
       hall: schedHall.trim() || "قاعة عامة",
       lectureType: schedLectureType,
+      targetGroup: schedTargetGroup || "ALL",
       isWeekly: schedIsWeekly,
       isCancelled: false,
       note: schedNote.trim() || "",
@@ -1510,17 +1634,24 @@ export default function App() {
     };
     await saveScheduleToFirestore(scheduleItem);
 
+    const groupBadgeLabel =
+      scheduleItem.targetGroup && scheduleItem.targetGroup !== "ALL"
+        ? ` (${scheduleItem.targetGroup})`
+        : "";
+
     await broadcastBatchNotification({
       allUsers: appUsers,
       batchCode: effectiveBatchCode,
       excludeUid: currentUser?.uid,
       category: "SCHEDULE",
       title: editingScheduleId
-        ? `🗓️ تحديث محاضرة في الجدول: ${resolvedCourseName}`
-        : `🗓️ محاضرة جديدة في الجدول: ${resolvedCourseName}`,
+        ? `🗓️ تحديث محاضرة في الجدول: ${resolvedCourseName}${groupBadgeLabel}`
+        : `🗓️ محاضرة جديدة في الجدول: ${resolvedCourseName}${groupBadgeLabel}`,
       content: `يوم ${schedDay} • وقت البدء: ${schedStartTime.trim()}${
-        schedHall.trim() ? ` • القاعة: ${schedHall.trim()}` : ""
-      }`,
+        scheduleItem.targetGroup && scheduleItem.targetGroup !== "ALL"
+          ? ` • الفئة: ${scheduleItem.targetGroup}`
+          : " • للدفعة كاملة"
+      }${schedHall.trim() ? ` • القاعة: ${schedHall.trim()}` : ""}`,
       targetTab: Tab.SCHEDULE,
     });
 
@@ -1535,6 +1666,7 @@ export default function App() {
     setSchedEndTime("10:30 ص");
     setSchedHall("");
     setSchedLectureType("THEORY");
+    setSchedTargetGroup("ALL");
     setSchedIsWeekly(true);
     setSchedNote("");
   };
@@ -2083,6 +2215,7 @@ export default function App() {
         ...targetUser,
         name: finalName,
         batchCode: targetUser.batchCode || effectiveBatchCode,
+        academicGroup: targetUser.academicGroup || oldStudent.academicGroup || "",
         excludeFromStats: false,
         studiedMaterialIds: mergedStudied,
         bookmarkedMaterialIds: mergedBookmarks,
@@ -2936,8 +3069,12 @@ export default function App() {
     }
 
     const typeLabel = sched.lectureType === "PRACTICAL" ? "عملي" : "نظري";
+    const groupPart =
+      sched.targetGroup && sched.targetGroup !== "ALL"
+        ? ` - ${sched.targetGroup}`
+        : "";
     const timePart = sched.startTime ? ` • ${sched.startTime}` : "";
-    const autoTitle = `${sched.courseName} (${typeLabel}${timePart})`;
+    const autoTitle = `${sched.courseName} (${typeLabel}${groupPart}${timePart})`;
 
     const newSession: AttendanceSession = {
       id: `session_${Date.now()}`,
@@ -2951,6 +3088,7 @@ export default function App() {
       endTime: sched.endTime,
       hall: sched.hall,
       lectureType: sched.lectureType || "THEORY",
+      targetGroup: sched.targetGroup || "ALL",
       createdBy: currentUser?.uid || "admin",
       timestamp: Date.now(),
     };
@@ -2959,6 +3097,7 @@ export default function App() {
     if (matchedCourse) {
       setSelectedCourseForAttendance(matchedCourse);
     }
+    setAttendanceGroupFilter("DEFAULT");
     setSelectedSessionId(newSession.id);
     setActiveTab(Tab.ATTENDANCE);
 
@@ -2985,18 +3124,27 @@ export default function App() {
       return;
     }
 
+    const groupSuffix =
+      newSessionTargetGroup && newSessionTargetGroup !== "ALL"
+        ? ` - ${newSessionTargetGroup}`
+        : "";
+
     const newSession: AttendanceSession = {
       id: `session_${Date.now()}`,
       batchCode: effectiveBatchCode,
       courseId: selectedCourseForAttendance.id,
       courseName: selectedCourseForAttendance.name,
       date: newSessionDate,
-      title: newSessionTitle || `محاضرة إضافية (${newSessionDate})`,
+      title: newSessionTitle
+        ? `${newSessionTitle}${groupSuffix}`
+        : `محاضرة إضافية${groupSuffix} (${newSessionDate})`,
+      targetGroup: newSessionTargetGroup || "ALL",
       createdBy: currentUser?.uid || "admin",
       timestamp: Date.now(),
     };
 
     await saveAttendanceSessionToFirestore(newSession);
+    setAttendanceGroupFilter("DEFAULT");
     setSelectedSessionId(newSession.id);
     if (autoCopyFromSessionId) {
       await handleCopyAttendanceFromSession(autoCopyFromSessionId, newSession.id);
@@ -3004,6 +3152,7 @@ export default function App() {
     setNewSessionDate(new Date().toISOString().slice(0, 10));
     setNewSessionTitle("");
     setSelectedScheduleSlotId("");
+    setNewSessionTargetGroup("ALL");
     setIsAddingSession(false);
   };
 
@@ -3012,36 +3161,173 @@ export default function App() {
     if (selectedSessionId === sessionId) setSelectedSessionId(null);
   };
 
+  // Update targetGroup of an already opened AttendanceSession
+  const handleUpdateSessionTargetGroup = async (
+    session: AttendanceSession,
+    nextGroup: string
+  ) => {
+    const updatedSession: AttendanceSession = {
+      ...session,
+      targetGroup: nextGroup || "ALL",
+    };
+    await saveAttendanceSessionToFirestore(updatedSession);
+    setAttendanceGroupFilter("DEFAULT");
+  };
+
+  // Add an exceptional student from another group (with optional swap) to the current session
+  const handleAddExceptionAttendanceRecord = async () => {
+    if (!selectedSessionId || !exceptionStudentId) return;
+    const sessionObj = attendanceSessions.find((s) => s.id === selectedSessionId);
+    const guestStudent = appUsers.find((u) => u.uid === exceptionStudentId);
+    if (!guestStudent || !sessionObj) return;
+
+    const swappedStudent = exceptionSwappedWithId
+      ? appUsers.find((u) => u.uid === exceptionSwappedWithId)
+      : undefined;
+
+    const existingGuestRec = attendanceRecords.find(
+      (r) => r.sessionId === selectedSessionId && r.studentId === guestStudent.uid
+    );
+
+    const guestRec: AttendanceRecord = {
+      id: existingGuestRec
+        ? existingGuestRec.id
+        : `rec_${Date.now()}_${guestStudent.uid}`,
+      batchCode: effectiveBatchCode,
+      sessionId: selectedSessionId,
+      studentId: guestStudent.uid,
+      status: exceptionStatus,
+      isException: true,
+      originalGroup: guestStudent.academicGroup || "كروب آخر",
+      ...(swappedStudent
+        ? {
+            swappedWithStudentId: swappedStudent.uid,
+            swappedWithStudentName: swappedStudent.name,
+          }
+        : {}),
+      ...(exceptionNote.trim() ? { exceptionNote: exceptionNote.trim() } : {}),
+      timestamp: Date.now(),
+    };
+
+    await saveAttendanceRecordToFirestore(guestRec);
+
+    // If swapped with a student from the current lecture's group, mark that student as EXCUSED with swap note
+    if (swappedStudent) {
+      const existingSwapTargetRec = attendanceRecords.find(
+        (r) =>
+          r.sessionId === selectedSessionId && r.studentId === swappedStudent.uid
+      );
+      const swapTargetRec: AttendanceRecord = {
+        id: existingSwapTargetRec
+          ? existingSwapTargetRec.id
+          : `rec_${Date.now()}_${swappedStudent.uid}`,
+        batchCode: effectiveBatchCode,
+        sessionId: selectedSessionId,
+        studentId: swappedStudent.uid,
+        status: "EXCUSED",
+        swappedWithStudentId: guestStudent.uid,
+        swappedWithStudentName: guestStudent.name,
+        exceptionNote:
+          exceptionNote.trim() ||
+          `تبديل كروب مؤقت مع الطالب (${guestStudent.name})`,
+        timestamp: Date.now(),
+      };
+      await saveAttendanceRecordToFirestore(swapTargetRec);
+    }
+
+    const courseObj = courses.find((c) => c.id === sessionObj.courseId);
+    await notifyUserIfAllowed({
+      targetUser: guestStudent,
+      category: "ATTENDANCE",
+      title: `🔄 تسجيل حضور استثنائي في ${courseObj?.name || sessionObj.courseName || "المحاضرة"}`,
+      content: `تم تسجيل حضورك الاستثنائي مع (${
+        sessionObj.targetGroup && sessionObj.targetGroup !== "ALL"
+          ? sessionObj.targetGroup
+          : "المحاضرة"
+      })${swappedStudent ? ` بديلاً عن (${swappedStudent.name})` : ""} بتاريخ ${
+        sessionObj.date
+      }.`,
+      batchCode: effectiveBatchCode,
+      targetTab: Tab.ATTENDANCE,
+    });
+
+    setIsAddingExceptionModalOpen(false);
+    setExceptionStudentId("");
+    setExceptionSwappedWithId("");
+    setExceptionNote("");
+    setExceptionStatus("PRESENT");
+    setExceptionSearchQuery("");
+  };
+
+  const handleRemoveExceptionRecord = async (recordId: string) => {
+    await deleteAttendanceRecordFromFirestore(recordId);
+  };
+
   const handleMarkAttendance = async (
     studentId: string,
     status: 'PRESENT' | 'ABSENT' | 'EXCUSED',
+    extraMeta?: Partial<AttendanceRecord>
   ) => {
     if (!selectedSessionId) return;
+
+    const sessionObj = attendanceSessions.find((s) => s.id === selectedSessionId);
+    const linkedSched = sessionObj?.scheduleId
+      ? schedules.find((sc) => sc.id === sessionObj.scheduleId)
+      : undefined;
+    const effectiveTargetGroup =
+      sessionObj?.targetGroup || linkedSched?.targetGroup || "ALL";
+    const targetStudent = appUsers.find((u) => u.uid === studentId);
 
     const existingRecord = attendanceRecords.find(
       (r) => r.sessionId === selectedSessionId && r.studentId === studentId,
     );
+
+    // Automatically detect if this student belongs to a different group than the session's targetGroup
+    const isAutoException =
+      existingRecord?.isException ||
+      extraMeta?.isException ||
+      (effectiveTargetGroup !== "ALL" &&
+        Boolean(targetStudent?.academicGroup) &&
+        targetStudent?.academicGroup !== effectiveTargetGroup);
+
     const recData: AttendanceRecord = {
       id: existingRecord ? existingRecord.id : `rec_${Date.now()}_${studentId}`,
       batchCode: effectiveBatchCode,
       sessionId: selectedSessionId,
       studentId,
       status,
+      ...(isAutoException
+        ? {
+            isException: true,
+            originalGroup:
+              existingRecord?.originalGroup ||
+              targetStudent?.academicGroup ||
+              "كروب آخر",
+          }
+        : {}),
+      ...(existingRecord?.swappedWithStudentId
+        ? {
+            swappedWithStudentId: existingRecord.swappedWithStudentId,
+            swappedWithStudentName: existingRecord.swappedWithStudentName,
+          }
+        : {}),
+      ...(existingRecord?.exceptionNote
+        ? { exceptionNote: existingRecord.exceptionNote }
+        : {}),
+      ...extraMeta,
       timestamp: Date.now(),
     };
     await saveAttendanceRecordToFirestore(recData);
 
-    const targetStudent = appUsers.find((u) => u.uid === studentId);
     if (targetStudent && (!existingRecord || existingRecord.status !== status)) {
-      const sessObj = attendanceSessions.find((s) => s.id === selectedSessionId);
-      const courseObj = courses.find((c) => c.id === sessObj?.courseId);
+      const courseObj = courses.find((c) => c.id === sessionObj?.courseId);
       const statusAr =
         status === "PRESENT" ? "حاضر ✅" : status === "EXCUSED" ? "مجاز 📝" : "غائب ❌";
       await notifyUserIfAllowed({
         targetUser: targetStudent,
         category: "ATTENDANCE",
-        title: `✅ تسجيل حضورك في ${courseObj?.name || "المحاضرة"}`,
-        content: `تم تسجيل حالتك (${statusAr}) في ${sessObj?.title || "المحاضرة"} بتاريخ ${sessObj?.date || ""}.`,
+        title: `✅ تسجيل حضورك في ${courseObj?.name || sessionObj?.courseName || "المحاضرة"}`,
+        content: `تم تسجيل حالتك (${statusAr}) في ${sessionObj?.title || "المحاضرة"} بتاريخ ${sessionObj?.date || ""}.`,
         batchCode: effectiveBatchCode,
         targetTab: Tab.ATTENDANCE,
       });
@@ -4140,7 +4426,8 @@ export default function App() {
 
                           const voterNames = (opt.votes || [])
                             .map((uid) => appUsers.find((u) => u.uid === uid)?.name || "طالب")
-                            .filter(Boolean);
+                            .filter(Boolean)
+                            .sort((a, b) => compareArabicNames(a, b));
 
                           return (
                             <div key={opt.id} className="space-y-1">
@@ -5048,6 +5335,7 @@ export default function App() {
                               .toLowerCase()
                               .includes(gradeEditorSearch.toLowerCase())
                           )
+                          .sort((a, b) => compareArabicNames(a.name, b.name))
                           .map((student, idx) => (
                             <tr
                               key={student.uid}
@@ -5248,6 +5536,7 @@ export default function App() {
                               .toLowerCase()
                               .includes(gradeEditorSearch.toLowerCase())
                           )
+                          .sort((a, b) => compareArabicNames(a.name, b.name))
                           .map((student, idx) => {
                             let studentCumulativeTotal = 0;
                             let hasAnyRecorded = false;
@@ -5848,6 +6137,11 @@ export default function App() {
           ? schedules.find((sc) => sc.id === session.scheduleId)
           : undefined;
 
+        const sessionTargetGroup =
+          session?.targetGroup || linkedSchedule?.targetGroup || "ALL";
+        const isGroupSpecificSession =
+          Boolean(sessionTargetGroup) && sessionTargetGroup !== "ALL";
+
         const records = attendanceRecords.filter(
           (r) => r.sessionId === selectedSessionId,
         );
@@ -5863,19 +6157,72 @@ export default function App() {
 
         // Alphabetical sorting in Arabic
         const sortedStudents = [...activeBatchStudents].sort((a, b) =>
-          a.name.localeCompare(b.name, "ar", { sensitivity: "base" })
+          compareArabicNames(a.name, b.name)
         );
 
-        const displayedStudents = sortedStudents.filter((s) =>
+        // Students who belong to this session's target group OR have an exception/record in this session
+        const relevantSessionStudents = isGroupSpecificSession
+          ? sortedStudents.filter(
+              (s) =>
+                s.academicGroup === sessionTargetGroup ||
+                records.some((r) => r.studentId === s.uid)
+            )
+          : sortedStudents;
+
+        // Apply sheet group filter + search query
+        const groupFilteredStudents = sortedStudents.filter((s) => {
+          if (attendanceSheetGroupFilter === "SESSION_GROUP") {
+            if (!isGroupSpecificSession) return true;
+            return (
+              s.academicGroup === sessionTargetGroup ||
+              records.some((r) => r.studentId === s.uid)
+            );
+          }
+          if (attendanceSheetGroupFilter === "ALL") {
+            return true;
+          }
+          if (attendanceSheetGroupFilter === "UNASSIGNED") {
+            return !s.academicGroup;
+          }
+          return s.academicGroup === attendanceSheetGroupFilter;
+        });
+
+        const displayedStudents = groupFilteredStudents.filter((s) =>
           s.name.toLowerCase().includes(attendanceSearchQuery.toLowerCase())
         );
 
         const unrecordedCount = Math.max(
           0,
-          sortedStudents.length - (presentCount + absentCount + excusedCount)
+          relevantSessionStudents.length -
+            (presentCount + absentCount + excusedCount)
         );
 
-        // Find previous sessions that have attendance records (prioritizing same-day lectures across any course!)
+        // Exceptions list in this session
+        const exceptionRecords = records.filter((r) => {
+          if (r.isException) return true;
+          if (isGroupSpecificSession) {
+            const st = sortedStudents.find((u) => u.uid === r.studentId);
+            return Boolean(
+              st && st.academicGroup && st.academicGroup !== sessionTargetGroup
+            );
+          }
+          return false;
+        });
+
+        // Students from OTHER groups available to add as an exception/swap
+        const otherGroupStudents = sortedStudents.filter((s) => {
+          if (isGroupSpecificSession) {
+            return s.academicGroup !== sessionTargetGroup;
+          }
+          return true;
+        });
+
+        // Students in THIS session's group (for swap target selection)
+        const currentGroupStudents = isGroupSpecificSession
+          ? sortedStudents.filter((s) => s.academicGroup === sessionTargetGroup)
+          : sortedStudents;
+
+        // Find previous sessions that have attendance records (prioritizing same-day lectures & same targetGroup!)
         const previousSessionsWithRecords = attendanceSessions
           .filter(
             (s) =>
@@ -5886,6 +6233,11 @@ export default function App() {
             const aSameDay = a.date === session?.date ? 1 : 0;
             const bSameDay = b.date === session?.date ? 1 : 0;
             if (aSameDay !== bSameDay) return bSameDay - aSameDay;
+            const aSameGroup =
+              (a.targetGroup || "ALL") === sessionTargetGroup ? 1 : 0;
+            const bSameGroup =
+              (b.targetGroup || "ALL") === sessionTargetGroup ? 1 : 0;
+            if (aSameGroup !== bSameGroup) return bSameGroup - aSameGroup;
             if (a.date !== b.date) return b.date.localeCompare(a.date);
             return (b.timestamp || 0) - (a.timestamp || 0);
           });
@@ -5913,6 +6265,7 @@ export default function App() {
                     setSelectedSessionId(null);
                     setAttendanceSearchQuery("");
                     setCopyAttendanceSuccess(null);
+                    setAttendanceSheetGroupFilter("SESSION_GROUP");
                   }}
                   className="w-10 h-10 bg-gray-100 dark:bg-slate-700 rounded-2xl flex items-center justify-center hover:bg-gray-200 dark:hover:bg-slate-600 transition shrink-0"
                   title="العودة لقائمة المحاضرات"
@@ -5945,6 +6298,20 @@ export default function App() {
                           : "نظري 📖"}
                       </span>
                     )}
+                    <span
+                      className={`text-[10px] font-black px-2.5 py-0.5 rounded-full flex items-center gap-1 ${
+                        isGroupSpecificSession
+                          ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300/60"
+                          : "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                      }`}
+                    >
+                      <Users size={11} />
+                      <span>
+                        {isGroupSpecificSession
+                          ? `مخصصة لـ: ${sessionTargetGroup}`
+                          : "لجميع الكروبات (العام)"}
+                      </span>
+                    </span>
                     {(session?.scheduleId || linkedSchedule) && (
                       <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
                         🔄 من الجدول الأسبوعي
@@ -5977,7 +6344,7 @@ export default function App() {
                     )}
                     <span>•</span>
                     <span className="font-bold text-gray-600 dark:text-gray-300">
-                      ({sortedStudents.length} طالب مشمول)
+                      ({relevantSessionStudents.length} طالب مشمول بهذه المحاضرة)
                     </span>
                   </div>
                 </div>
@@ -5997,6 +6364,11 @@ export default function App() {
                   <span className="w-2 h-2 rounded-full bg-amber-500"></span>
                   <span>مجاز: {excusedCount}</span>
                 </div>
+                {exceptionRecords.length > 0 && (
+                  <div className="bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800/40 px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-sm">
+                    <span>🔄 استثناء/تبديل: {exceptionRecords.length}</span>
+                  </div>
+                )}
                 {unrecordedCount > 0 && (
                   <div className="bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-gray-400 px-3 py-1.5 rounded-xl text-xs font-bold">
                     لم يُسجل: {unrecordedCount}
@@ -6004,6 +6376,125 @@ export default function App() {
                 )}
               </div>
             </div>
+
+            {/* Group Target & Exception/Swap Management Banner */}
+            <div className="bg-gradient-to-r from-amber-50/90 via-orange-50/60 to-amber-50/90 dark:from-slate-800 dark:via-slate-800/95 dark:to-slate-800 p-4 rounded-3xl border border-amber-200/80 dark:border-amber-800/40 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-md shadow-amber-500/20">
+                  <Users size={19} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-xs sm:text-sm font-black text-gray-900 dark:text-white">
+                      {isGroupSpecificSession
+                        ? `كشف حضور طلاب (${sessionTargetGroup}) + الاستثناءات والتبديل المؤقت`
+                        : "تخصيص الكروب أو تسجيل استثناء / تبديل طالب بين الكروبات 🔄"}
+                    </h3>
+                    {session && (
+                      <select
+                        value={sessionTargetGroup}
+                        onChange={async (e) => {
+                          const newGrp = e.target.value;
+                          await saveAttendanceSessionToFirestore({
+                            ...session,
+                            targetGroup: newGrp,
+                          });
+                          setAttendanceSheetGroupFilter("SESSION_GROUP");
+                        }}
+                        className="bg-white dark:bg-slate-700 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 rounded-xl px-2.5 py-1 text-[11px] font-black outline-none cursor-pointer"
+                        title="تغيير الكروب المخصص لهذه المحاضرة"
+                      >
+                        <option value="ALL">👥 لجميع الكروبات (العام)</option>
+                        {batchAcademicGroups.map((grp) => (
+                          <option key={grp} value={grp}>
+                            🔬 مخصصة لـ: {grp}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-gray-600 dark:text-gray-300 mt-0.5 leading-relaxed">
+                    هل حضر طالب من كروب آخر مع هذه المحاضرة كاستثناء أو قام بتبديل كروبه مؤقتاً مع زميله؟ أضفه هنا بضغطة زر ليُسجل حضوره أصولياً دون تغيير كروبه الأصلي الثابت.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExceptionGuestStudentId("");
+                    setExceptionSwapTargetStudentId("");
+                    setExceptionNoteInput("");
+                    setExceptionMode("ATTEND_WITH_GROUP");
+                    setIsExceptionModalOpen(true);
+                  }}
+                  className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-2xl text-xs font-black transition shadow-md shadow-amber-500/20 flex items-center justify-center gap-2 active:scale-95"
+                >
+                  <ArrowRightLeft size={15} />
+                  <span>+ إضافة طالب استثناء أو تبديل كروب 🔄</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Active Exceptions & Swaps List in this Session (if any) */}
+            {exceptionRecords.length > 0 && (
+              <div className="bg-purple-50/70 dark:bg-purple-950/25 border border-purple-200 dark:border-purple-800/50 rounded-3xl p-4 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black text-purple-900 dark:text-purple-200 flex items-center gap-1.5">
+                    <ArrowRightLeft size={15} className="text-purple-600" />
+                    <span>
+                      الطلاب الحاضرون كاستثناء أو تبديل كروب في هذه المحاضرة ({exceptionRecords.length})
+                    </span>
+                  </h4>
+                  <span className="text-[10px] font-bold text-purple-600 dark:text-purple-300">
+                    محفوظ في سجل المحاضرة والتقارير
+                  </span>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {exceptionRecords.map((rec) => {
+                    const st = appUsers.find((u) => u.uid === rec.studentId);
+                    return (
+                      <div
+                        key={rec.id}
+                        className="bg-white dark:bg-slate-800 p-3 rounded-2xl border border-purple-200/80 dark:border-slate-700 flex items-center justify-between gap-2 shadow-2xs"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <img
+                            src={st?.avatar}
+                            alt=""
+                            className="w-8 h-8 rounded-full object-cover border border-purple-200 shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs font-bold text-gray-800 dark:text-white truncate">
+                                {st?.name || "طالب"}
+                              </span>
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300">
+                                أصله: {rec.originalGroup || st?.academicGroup || "غير محدد"}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-gray-500 dark:text-gray-400 truncate mt-0.5">
+                              {rec.swappedWithStudentName
+                                ? `⇄ بديل مؤقت مع: ${rec.swappedWithStudentName}`
+                                : rec.exceptionNote || "حضور استثنائي مع هذا الكروب"}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveExceptionStudent(rec.id)}
+                          className="p-1.5 text-gray-400 hover:text-red-500 rounded-xl hover:bg-red-50 dark:hover:bg-slate-700 transition shrink-0"
+                          title="إلغاء الاستثناء من هذه المحاضرة"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* One-Click Copy Attendance from Previous Lecture Card */}
             {previousSessionsWithRecords.length > 0 && (
@@ -6102,52 +6593,112 @@ export default function App() {
               </div>
             )}
 
-            {/* Quick Bulk Actions & Search Filter */}
-            <div className="bg-white dark:bg-slate-800 p-4 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-              {/* Search Bar */}
-              <div className="relative flex-1">
-                <Search
-                  size={16}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400"
-                />
-                <input
-                  type="text"
-                  value={attendanceSearchQuery}
-                  onChange={(e) => setAttendanceSearchQuery(e.target.value)}
-                  placeholder="ابحث عن اسم طالب في القائمة..."
-                  className="w-full bg-gray-50 dark:bg-slate-700/60 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl pr-10 pl-4 py-2 text-xs outline-none"
-                />
+            {/* Quick Bulk Actions, Group Filter Pills & Search Filter */}
+            <div className="bg-white dark:bg-slate-800 p-4 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 space-y-3">
+              {/* Group Filter Pills inside Attendance Sheet */}
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 border-b border-gray-100 dark:border-slate-700/70">
+                <span className="text-[11px] font-bold text-gray-400 ml-1 shrink-0">
+                  عرض الكروب:
+                </span>
+                {isGroupSpecificSession && (
+                  <button
+                    type="button"
+                    onClick={() => setAttendanceSheetGroupFilter("SESSION_GROUP")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black whitespace-nowrap transition flex items-center gap-1.5 ${
+                      attendanceSheetGroupFilter === "SESSION_GROUP"
+                        ? "bg-amber-500 text-white shadow-sm"
+                        : "bg-amber-50 dark:bg-slate-700 text-amber-800 dark:text-amber-300"
+                    }`}
+                  >
+                    <span>🔬 طلاب {sessionTargetGroup} والاستثناءات</span>
+                    <span className="px-1.5 py-0.2 rounded-full bg-black/15 text-[10px]">
+                      {relevantSessionStudents.length}
+                    </span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setAttendanceSheetGroupFilter("ALL")}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+                    attendanceSheetGroupFilter === "ALL" ||
+                    (!isGroupSpecificSession &&
+                      attendanceSheetGroupFilter === "SESSION_GROUP")
+                      ? "bg-primary text-white shadow-sm"
+                      : "bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300"
+                  }`}
+                >
+                  كل الدفعة ({sortedStudents.length})
+                </button>
+                {batchAcademicGroups.map((grp) => {
+                  const cnt = sortedStudents.filter(
+                    (s) => s.academicGroup === grp
+                  ).length;
+                  return (
+                    <button
+                      key={grp}
+                      type="button"
+                      onClick={() => setAttendanceSheetGroupFilter(grp)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition flex items-center gap-1 ${
+                        attendanceSheetGroupFilter === grp
+                          ? "bg-indigo-600 text-white shadow-sm"
+                          : "bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 hover:bg-indigo-50"
+                      }`}
+                    >
+                      <span>{grp}</span>
+                      <span className="text-[10px] opacity-75">({cnt})</span>
+                    </button>
+                  );
+                })}
               </div>
 
-              {/* Bulk Buttons */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() =>
-                    handleBulkMarkAttendance("PRESENT", displayedStudents)
-                  }
-                  className="flex-1 sm:flex-none px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/40 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm active:scale-95"
-                  title="تحديد جميع الطلاب الظاهرين كـ حاضر"
-                >
-                  <Check size={14} />
-                  <span>الكل حاضر ✓</span>
-                </button>
-                <button
-                  onClick={() =>
-                    handleBulkMarkAttendance("ABSENT", displayedStudents)
-                  }
-                  className="flex-1 sm:flex-none px-3.5 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800/40 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm active:scale-95"
-                  title="تحديد جميع الطلاب الظاهرين كـ غائب"
-                >
-                  <X size={14} />
-                  <span>الكل غائب ✕</span>
-                </button>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                {/* Search Bar */}
+                <div className="relative flex-1">
+                  <Search
+                    size={16}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400"
+                  />
+                  <input
+                    type="text"
+                    value={attendanceSearchQuery}
+                    onChange={(e) => setAttendanceSearchQuery(e.target.value)}
+                    placeholder="ابحث عن اسم طالب في القائمة..."
+                    className="w-full bg-gray-50 dark:bg-slate-700/60 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl pr-10 pl-4 py-2 text-xs outline-none"
+                  />
+                </div>
+
+                {/* Bulk Buttons */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() =>
+                      handleBulkMarkAttendance("PRESENT", displayedStudents)
+                    }
+                    className="flex-1 sm:flex-none px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/40 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm active:scale-95"
+                    title="تحديد جميع الطلاب الظاهرين كـ حاضر"
+                  >
+                    <Check size={14} />
+                    <span>الكل حاضر ({displayedStudents.length}) ✓</span>
+                  </button>
+                  <button
+                    onClick={() =>
+                      handleBulkMarkAttendance("ABSENT", displayedStudents)
+                    }
+                    className="flex-1 sm:flex-none px-3.5 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800/40 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm active:scale-95"
+                    title="تحديد جميع الطلاب الظاهرين كـ غائب"
+                  >
+                    <X size={14} />
+                    <span>الكل غائب ✕</span>
+                  </button>
+                </div>
               </div>
             </div>
 
             {/* Alphabetical Student Roster Table */}
             <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 overflow-hidden">
               <div className="p-4 bg-gray-50/70 dark:bg-slate-700/30 border-b border-gray-100 dark:border-slate-700 flex justify-between items-center text-xs font-bold text-gray-500 dark:text-gray-400">
-                <span>اسم الطالب (مرتب أبجدياً أ - ي)</span>
+                <span>
+                  اسم الطالب والكروب ({displayedStudents.length} طالب ظاهر - مرتب أبجدياً)
+                </span>
                 <span>تسجيل الحالة (حاضر / غائب / مجاز)</span>
               </div>
 
@@ -6157,11 +6708,21 @@ export default function App() {
                     (r) => r.studentId === student.uid,
                   );
                   const status = record?.status;
+                  const isFromOtherGroup =
+                    isGroupSpecificSession &&
+                    Boolean(student.academicGroup) &&
+                    student.academicGroup !== sessionTargetGroup;
+                  const isExceptionStudent =
+                    Boolean(record?.isException) || isFromOtherGroup;
 
                   return (
                     <div
                       key={student.uid}
-                      className="p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-gray-50/80 dark:hover:bg-slate-700/40 transition"
+                      className={`p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition ${
+                        isExceptionStudent
+                          ? "bg-purple-50/40 dark:bg-purple-950/15 hover:bg-purple-50/70 dark:hover:bg-purple-950/30"
+                          : "hover:bg-gray-50/80 dark:hover:bg-slate-700/40"
+                      }`}
                     >
                       {/* Student Info */}
                       <div className="flex items-center gap-3">
@@ -6174,15 +6735,47 @@ export default function App() {
                           alt=""
                         />
                         <div>
-                          <p className="font-bold text-sm text-gray-800 dark:text-white">
-                            {student.name}
-                          </p>
-                          <div className="flex items-center gap-2 text-[10px] text-gray-400 mt-0.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-bold text-sm text-gray-800 dark:text-white">
+                              {student.name}
+                            </p>
+                            {student.academicGroup ? (
+                              <span
+                                className={`text-[10px] font-black px-2 py-0.5 rounded-lg ${
+                                  isFromOtherGroup
+                                    ? "bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300 border border-purple-300/50"
+                                    : "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300 border border-indigo-200/50"
+                                }`}
+                              >
+                                {student.academicGroup}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-slate-700 px-2 py-0.5 rounded-lg">
+                                بدون كروب
+                              </span>
+                            )}
+                            {isExceptionStudent && (
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 flex items-center gap-1">
+                                <ArrowRightLeft size={10} />
+                                <span>
+                                  {record?.swappedWithStudentName
+                                    ? `بديل عن: ${record.swappedWithStudentName}`
+                                    : "حضور استثنائي 🔄"}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 text-[10px] text-gray-400 mt-0.5 flex-wrap">
                             <span>
                               {student.username
                                 ? `@${student.username}`
                                 : "طالب نظامي"}
                             </span>
+                            {record?.exceptionNote && (
+                              <span className="text-purple-600 dark:text-purple-300 font-bold">
+                                • {record.exceptionNote}
+                              </span>
+                            )}
                             {status === "PRESENT" && (
                               <span className="text-emerald-600 font-bold bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.2 rounded-full">
                                 حاضر
@@ -6265,11 +6858,183 @@ export default function App() {
               </div>
 
               {displayedStudents.length === 0 && (
-                <div className="text-center py-12 text-gray-400 text-xs">
-                  لا توجد نتائج تطابق بحثك
+                <div className="text-center py-12 px-4 text-gray-400 text-xs space-y-2">
+                  <p className="font-bold text-gray-600 dark:text-gray-300">
+                    {isGroupSpecificSession &&
+                    attendanceSheetGroupFilter === "SESSION_GROUP"
+                      ? `لا يوجد طلاب معينين في (${sessionTargetGroup}) حالياً`
+                      : "لا توجد نتائج تطابق بحثك"}
+                  </p>
+                  {isGroupSpecificSession &&
+                    attendanceSheetGroupFilter === "SESSION_GROUP" && (
+                      <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setAttendanceSheetGroupFilter("ALL")}
+                          className="px-3.5 py-2 bg-primary text-white rounded-xl text-xs font-bold shadow-xs"
+                        >
+                          عرض كل طلاب الدفعة ({sortedStudents.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab(Tab.STUDENTS)}
+                          className="px-3.5 py-2 bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-200 rounded-xl text-xs font-bold"
+                        >
+                          توزيع الطلاب على الكروبات في قسم الطلاب ➔
+                        </button>
+                      </div>
+                    )}
                 </div>
               )}
             </div>
+
+            {/* Modal: Add Temporary Exception or Student Swap for this Attendance Session */}
+            {isExceptionModalOpen && (
+              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+                <div className="bg-white dark:bg-slate-800 w-full max-w-lg rounded-3xl shadow-2xl p-6 animate-in zoom-in-95 border border-gray-100 dark:border-slate-700">
+                  <div className="flex justify-between items-center pb-4 border-b border-gray-100 dark:border-slate-700">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-10 h-10 rounded-2xl bg-amber-500/15 text-amber-600 flex items-center justify-center">
+                        <ArrowRightLeft size={20} />
+                      </div>
+                      <div>
+                        <h3 className="font-black text-base sm:text-lg text-gray-800 dark:text-white">
+                          تسجيل استثناء أو تبديل كروب مؤقت 🔄
+                        </h3>
+                        <p className="text-[11px] text-gray-400">
+                          لطالب حضر مع هذا الكروب بظرف طارئ أو بدّل مع زميله لهذه المحاضرة فقط
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsExceptionModalOpen(false)}
+                      className="text-gray-400 hover:text-gray-600 p-1.5 rounded-xl"
+                    >
+                      <X size={20} />
+                    </button>
+                  </div>
+
+                  <div className="space-y-4 py-4">
+                    {/* Mode Switcher: Exception vs Swap */}
+                    <div>
+                      <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                        نوع الحالة الاستثنائية:
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setExceptionMode("ATTEND_WITH_GROUP")}
+                          className={`p-3 rounded-2xl border text-xs font-bold flex flex-col items-center gap-1 transition ${
+                            exceptionMode === "ATTEND_WITH_GROUP"
+                              ? "bg-amber-500 text-white border-amber-500 shadow-md shadow-amber-500/20"
+                              : "bg-gray-50 dark:bg-slate-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-slate-600"
+                          }`}
+                        >
+                          <UserPlus size={16} />
+                          <span>حضور استثنائي مع الكروب</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setExceptionMode("SWAP_WITH_STUDENT")}
+                          className={`p-3 rounded-2xl border text-xs font-bold flex flex-col items-center gap-1 transition ${
+                            exceptionMode === "SWAP_WITH_STUDENT"
+                              ? "bg-purple-600 text-white border-purple-600 shadow-md shadow-purple-500/20"
+                              : "bg-gray-50 dark:bg-slate-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-slate-600"
+                          }`}
+                        >
+                          <ArrowRightLeft size={16} />
+                          <span>تبديل مؤقت مع طالب آخر</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 1. Select Guest Student (from another group) */}
+                    <div>
+                      <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                        1. اختر الطالب الحاضر من الكروب الآخر <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={exceptionGuestStudentId}
+                        onChange={(e) => setExceptionGuestStudentId(e.target.value)}
+                        className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-xs font-bold outline-none cursor-pointer"
+                      >
+                        <option value="">-- اختر الطالب الوافد لهذه المحاضرة --</option>
+                        {otherGroupStudents.map((st) => (
+                          <option key={st.uid} value={st.uid}>
+                            👤 {st.name} ({st.academicGroup || "بدون كروب"})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* 2. If Swap mode: Select Student from THIS group who swapped */}
+                    {exceptionMode === "SWAP_WITH_STUDENT" && (
+                      <div className="p-3.5 rounded-2xl bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/50 space-y-2">
+                        <label className="text-xs font-bold text-purple-900 dark:text-purple-200 block">
+                          2. اختر الطالب البديل من ({isGroupSpecificSession ? sessionTargetGroup : "هذا الكروب"}) <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                          value={exceptionSwapTargetStudentId}
+                          onChange={(e) =>
+                            setExceptionSwapTargetStudentId(e.target.value)
+                          }
+                          className="w-full bg-white dark:bg-slate-800 text-gray-800 dark:text-white border border-purple-200 dark:border-slate-600 rounded-xl px-3.5 py-2.5 text-xs font-bold outline-none cursor-pointer"
+                        >
+                          <option value="">-- اختر الطالب الذي بدّل مكانه --</option>
+                          {currentGroupStudents
+                            .filter((st) => st.uid !== exceptionGuestStudentId)
+                            .map((st) => (
+                              <option key={st.uid} value={st.uid}>
+                                🔄 {st.name} ({st.academicGroup || "هذا الكروب"})
+                              </option>
+                            ))}
+                        </select>
+                        <p className="text-[10px] text-purple-700 dark:text-purple-300 leading-relaxed">
+                          * سيتم تسجيل الطالب الوافد <strong>حاضر ✅</strong> في هذه المحاضرة، وتسجيل الطالب الذي بدّل معه <strong>مجاز (تبديل كروب) 📝</strong> تلقائياً حتى لا يُحسب غائباً.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* 3. Optional Note */}
+                    <div>
+                      <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1 block">
+                        سبب الاستثناء أو ملاحظة (اختياري)
+                      </label>
+                      <input
+                        type="text"
+                        value={exceptionNoteInput}
+                        onChange={(e) => setExceptionNoteInput(e.target.value)}
+                        placeholder="مثال: ظرف طارئ / إذن من أستاذ المختبر..."
+                        className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-2.5 text-xs outline-none"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 pt-3 border-t border-gray-100 dark:border-slate-700">
+                      <button
+                        type="button"
+                        onClick={() => setIsExceptionModalOpen(false)}
+                        className="flex-1 py-3 bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 rounded-2xl font-bold text-xs"
+                      >
+                        إلغاء
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          !exceptionGuestStudentId ||
+                          (exceptionMode === "SWAP_WITH_STUDENT" &&
+                            !exceptionSwapTargetStudentId)
+                        }
+                        onClick={handleAddExceptionOrSwapAttendance}
+                        className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-2xl font-black text-xs shadow-lg shadow-amber-500/25 disabled:opacity-50 transition active:scale-95"
+                      >
+                        تأكيد وتسجيل الحضور الاستثنائي ✅
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         );
       }
@@ -6360,6 +7125,13 @@ export default function App() {
                     const presCount = existingRecords.filter(
                       (r) => r.status === "PRESENT"
                     ).length;
+                    const schedTargetGrp = sched.targetGroup || "ALL";
+                    const expectedStudentsCount =
+                      schedTargetGrp !== "ALL"
+                        ? activeBatchStudents.filter(
+                            (st) => st.academicGroup === schedTargetGrp
+                          ).length || activeBatchStudents.length
+                        : activeBatchStudents.length;
 
                     return (
                       <div
@@ -6385,6 +7157,17 @@ export default function App() {
                             >
                               {sched.lectureType === "PRACTICAL" ? "عملي 🔬" : "نظري 📖"}
                             </span>
+                            <span
+                              className={`text-[10px] font-black px-2 py-0.5 rounded-lg ${
+                                schedTargetGrp !== "ALL"
+                                  ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+                                  : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                              }`}
+                            >
+                              {schedTargetGrp !== "ALL"
+                                ? `🔬 ${schedTargetGrp}`
+                                : "👥 كل الدفعة"}
+                            </span>
                           </div>
                           <p className="text-[11px] text-gray-500 dark:text-gray-400">
                             أقرب تاريخ للمحاضرة: <strong className="font-mono">{mostRecentDate}</strong>
@@ -6392,7 +7175,7 @@ export default function App() {
                           </p>
                           {existingSess && (
                             <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-bold">
-                              ✅ تم تسجيل الحضور ({presCount} حاضر من {activeBatchStudents.length})
+                              ✅ تم تسجيل الحضور ({presCount} حاضر من {expectedStudentsCount})
                             </p>
                           )}
                         </div>
@@ -6438,13 +7221,24 @@ export default function App() {
                   const excusedCount = records.filter(
                     (r) => r.status === "EXCUSED",
                   ).length;
-                  const studentsCount = activeBatchStudents.length;
+                  const sessTargetGroup = session.targetGroup || "ALL";
+                  const studentsCount =
+                    sessTargetGroup !== "ALL"
+                      ? activeBatchStudents.filter(
+                          (st) =>
+                            st.academicGroup === sessTargetGroup ||
+                            records.some((r) => r.studentId === st.uid)
+                        ).length || activeBatchStudents.length
+                      : activeBatchStudents.length;
 
                   return (
                     <div
                       key={session.id}
                       className="bg-white dark:bg-slate-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 hover:shadow-md transition cursor-pointer group"
-                      onClick={() => setSelectedSessionId(session.id)}
+                      onClick={() => {
+                        setAttendanceGroupFilter("DEFAULT");
+                        setSelectedSessionId(session.id);
+                      }}
                     >
                       <div className="flex justify-between items-start mb-3">
                         <div className="flex items-center gap-2">
@@ -6455,11 +7249,24 @@ export default function App() {
                             <span className="text-[11px] font-bold text-gray-400 block">
                               {getArabicDayFromDateStr(session.date)} • {session.date}
                             </span>
-                            {session.startTime && (
-                              <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">
-                                ⏰ {session.startTime}
+                            <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                              {session.startTime && (
+                                <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">
+                                  ⏰ {session.startTime}
+                                </span>
+                              )}
+                              <span
+                                className={`text-[10px] font-black px-2 py-0.2 rounded-md ${
+                                  sessTargetGroup !== "ALL"
+                                    ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+                                    : "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                                }`}
+                              >
+                                {sessTargetGroup !== "ALL"
+                                  ? `🔬 ${sessTargetGroup}`
+                                  : "👥 كل الدفعة"}
                               </span>
-                            )}
+                            </div>
                           </div>
                         </div>
                         <button
@@ -6487,14 +7294,14 @@ export default function App() {
                         <div
                           className="bg-emerald-500 h-full rounded-full transition-all"
                           style={{
-                            width: `${studentsCount > 0 ? (presentCount / studentsCount) * 100 : 0}%`,
+                            width: `${studentsCount > 0 ? Math.min(100, (presentCount / studentsCount) * 100) : 0}%`,
                           }}
                         />
                       </div>
                       <div className="flex justify-between text-xs font-bold">
                         <span className="text-emerald-600">
                           {studentsCount > 0
-                            ? `${Math.round((presentCount / studentsCount) * 100)}% نسبة الحضور`
+                            ? `${Math.min(100, Math.round((presentCount / studentsCount) * 100))}% نسبة الحضور`
                             : "0%"}
                         </span>
                         <span className="text-gray-400">
@@ -6561,7 +7368,8 @@ export default function App() {
                             <option value="">➕ محاضرة إضافية / تعويضية (خارج الجدول)</option>
                             {courseSchedules.map((sc) => (
                               <option key={sc.id} value={sc.id}>
-                                📅 يوم {sc.day} • {sc.startTime} ({sc.lectureType === "PRACTICAL" ? "عملي" : "نظري"})
+                                📅 يوم {sc.day} • {sc.startTime} ({sc.lectureType === "PRACTICAL" ? "عملي" : "نظري"}
+                                {sc.targetGroup && sc.targetGroup !== "ALL" ? ` - ${sc.targetGroup}` : " - كل الدفعة"})
                               </option>
                             ))}
                           </select>
@@ -6569,18 +7377,37 @@ export default function App() {
                       )}
 
                       {!selectedScheduleSlotId && (
-                        <div>
-                          <label className="text-xs font-bold text-gray-600 dark:text-gray-300 mb-1 block">
-                            عنوان المحاضرة الإضافية (اختياري)
-                          </label>
-                          <input
-                            type="text"
-                            value={newSessionTitle}
-                            onChange={(e) => setNewSessionTitle(e.target.value)}
-                            placeholder="مثال: محاضرة تعويضية"
-                            className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-2.5 text-sm outline-none"
-                          />
-                        </div>
+                        <>
+                          <div>
+                            <label className="text-xs font-bold text-gray-600 dark:text-gray-300 mb-1 block">
+                              الكروب المستهدف بالمحاضرة الإضافية
+                            </label>
+                            <select
+                              value={newSessionTargetGroup}
+                              onChange={(e) => setNewSessionTargetGroup(e.target.value)}
+                              className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3.5 py-2.5 text-xs font-bold outline-none cursor-pointer"
+                            >
+                              <option value="ALL">👥 جميع طلاب الدفعة (العام)</option>
+                              {batchAcademicGroups.map((grp) => (
+                                <option key={grp} value={grp}>
+                                  🔬 مخصصة لـ {grp} فقط
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-xs font-bold text-gray-600 dark:text-gray-300 mb-1 block">
+                              عنوان المحاضرة الإضافية (اختياري)
+                            </label>
+                            <input
+                              type="text"
+                              value={newSessionTitle}
+                              onChange={(e) => setNewSessionTitle(e.target.value)}
+                              placeholder="مثال: محاضرة تعويضية"
+                              className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-2.5 text-sm outline-none"
+                            />
+                          </div>
+                        </>
                       )}
 
                       {topCandidate && (
@@ -6656,14 +7483,14 @@ export default function App() {
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-xl font-black text-gray-800 dark:text-white flex items-center gap-2">
                   <CalendarCheck className="text-primary" size={24} />
-                  إدارة الحضور والغياب الذكية (مرتبطة بالجدول)
+                  إدارة الحضور والغياب الذكية (مرتبطة بالجدول والكروبات)
                 </h2>
                 <span className="bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50 text-[11px] font-black px-2.5 py-0.5 rounded-full">
                   تلقائي من الجدول الأسبوعي 🔄
                 </span>
               </div>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                محاضرات الجدول الأسبوعي جاهزة أمامك تلقائياً حسب اليوم والوقت لتسجيل الحضور بضغطة واحدة دون إعادة كتابتها.
+                محاضرات الجدول الأسبوعي جاهزة أمامك تلقائياً حسب اليوم والوقت والكروب (مع دعم الاستثناءات وتبديل الطلاب).
               </p>
             </div>
             {currentUser && (
@@ -6709,7 +7536,7 @@ export default function App() {
                     محاضرات يوم {targetArabicDay} في الجدول الأسبوعي ({scheduledForTargetDay.length})
                   </h3>
                   <p className="text-xs text-blue-100 mt-0.5">
-                    اضغط على «تسجيل الحضور الآن» أمام أي محاضرة لفتح كشف أسماء الطلاب مباشرة.
+                    اضغط على «تسجيل الحضور الآن» أمام أي محاضرة لفتح كشف أسماء طلاب الكروب المخصص لها مباشرة.
                   </p>
                 </div>
 
@@ -6837,6 +7664,17 @@ export default function App() {
                     const isRecorded =
                       existingSession !== undefined && sessionRecords.length > 0;
 
+                    const schedTargetGroup =
+                      existingSession?.targetGroup || sched.targetGroup || "ALL";
+                    const expectedStudentsForSlot =
+                      schedTargetGroup !== "ALL"
+                        ? activeBatchStudents.filter(
+                            (st) =>
+                              st.academicGroup === schedTargetGroup ||
+                              sessionRecords.some((r) => r.studentId === st.uid)
+                          ).length || activeBatchStudents.length
+                        : activeBatchStudents.length;
+
                     // Check if there is another session recorded on the same day that we can copy from with 1 click
                     const earlierSameDaySession = sameDayRecordedSessions.find(
                       (s) => s.id !== existingSession?.id
@@ -6857,7 +7695,7 @@ export default function App() {
                         }`}
                       >
                         <div>
-                          {/* Top Row: Sequence + Time + Type + Status */}
+                          {/* Top Row: Sequence + Time + Type + Group + Status */}
                           <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="bg-indigo-600 text-white text-[11px] font-black px-2.5 py-1 rounded-xl">
@@ -6878,6 +7716,20 @@ export default function App() {
                                 {sched.lectureType === "PRACTICAL"
                                   ? "عملي / مختبر 🔬"
                                   : "نظري 📖"}
+                              </span>
+                              <span
+                                className={`text-[10px] font-black px-2.5 py-1 rounded-xl flex items-center gap-1 ${
+                                  schedTargetGroup !== "ALL"
+                                    ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300/60"
+                                    : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                                }`}
+                              >
+                                <Users size={11} />
+                                <span>
+                                  {schedTargetGroup !== "ALL"
+                                    ? schedTargetGroup
+                                    : "كل الدفعة"}
+                                </span>
                               </span>
                             </div>
 
@@ -6934,7 +7786,7 @@ export default function App() {
                                   </span>
                                 </div>
                                 <span className="text-gray-400 text-[11px]">
-                                  {sessionRecords.length} / {activeBatchStudents.length} طالب
+                                  {sessionRecords.length} / {expectedStudentsForSlot} طالب
                                 </span>
                               </div>
                               <div className="w-full h-2 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
@@ -6942,8 +7794,11 @@ export default function App() {
                                   className="h-full bg-emerald-500 rounded-full transition-all"
                                   style={{
                                     width: `${
-                                      activeBatchStudents.length > 0
-                                        ? (presentCount / activeBatchStudents.length) * 100
+                                      expectedStudentsForSlot > 0
+                                        ? Math.min(
+                                            100,
+                                            (presentCount / expectedStudentsForSlot) * 100
+                                          )
                                         : 0
                                     }%`,
                                   }}
@@ -6973,6 +7828,8 @@ export default function App() {
                             <span>
                               {existingSession
                                 ? "فتح وتعديل كشف الحضور ✅"
+                                : schedTargetGroup !== "ALL"
+                                ? `تسجيل حضور (${schedTargetGroup}) 📋`
                                 : "تسجيل حضور هذه المحاضرة 📋"}
                             </span>
                           </button>
@@ -7075,19 +7932,28 @@ export default function App() {
                     <span>تقارير الحضور والغياب والإجازات للطلاب (PDF شهري / فصلي)</span>
                   </h3>
                   <p className="text-[11px] text-gray-400 mt-0.5">
-                    اضغط على «تقرير PDF» أمام أي طالب لمعاينة وتحميل كشف حضوره الشهري أو الفصلي الرسمي.
+                    اضغط على «تقرير PDF» أمام أي طالب لمعاينة وتحميل كشف حضوره الشهري أو الفصلي الرسمي (يحسب محاضرات كروبه والاستثناءات تلقائياً).
                   </p>
                 </div>
               </div>
 
               <div className="divide-y divide-gray-50 dark:divide-slate-700 max-h-96 overflow-y-auto">
                 {batchStudentsForReports.map((st, i) => {
+                  const stRelevantSessions = attendanceSessions.filter((s) => {
+                    if (!s.targetGroup || s.targetGroup === "ALL") return true;
+                    if (!st.academicGroup) return true;
+                    if (s.targetGroup === st.academicGroup) return true;
+                    return attendanceRecords.some(
+                      (r) => r.sessionId === s.id && r.studentId === st.uid
+                    );
+                  });
+                  const stRelevantIds = new Set(stRelevantSessions.map((s) => s.id));
                   const stRecords = attendanceRecords.filter(
                     (r) =>
                       r.studentId === st.uid &&
-                      attendanceSessions.some((s) => s.id === r.sessionId)
+                      stRelevantIds.has(r.sessionId)
                   );
-                  const totalS = attendanceSessions.length;
+                  const totalS = stRelevantSessions.length;
                   const pres = stRecords.filter((r) => r.status === "PRESENT").length;
                   const abs = stRecords.filter((r) => r.status === "ABSENT").length;
                   const exc = stRecords.filter((r) => r.status === "EXCUSED").length;
@@ -7108,9 +7974,16 @@ export default function App() {
                           className="w-9 h-9 rounded-full object-cover border border-gray-100 dark:border-slate-600"
                         />
                         <div>
-                          <p className="text-xs sm:text-sm font-bold text-gray-800 dark:text-white">
-                            {st.name}
-                          </p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-xs sm:text-sm font-bold text-gray-800 dark:text-white">
+                              {st.name}
+                            </p>
+                            {st.academicGroup && (
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-lg bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300">
+                                {st.academicGroup}
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-2 text-[10px] font-bold mt-0.5">
                             <span className="text-emerald-600">حضور: {pres}</span>
                             <span>•</span>
@@ -7152,9 +8025,16 @@ export default function App() {
         <div className="space-y-6 p-4 pb-20">
           <div className="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-3xl p-6 text-white shadow-xl shadow-emerald-200 dark:shadow-none relative overflow-hidden mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="relative z-10">
-              <h2 className="text-2xl font-bold mb-2">سجل الحضور والمحاضرات 📅</h2>
+              <div className="flex items-center gap-2 flex-wrap mb-2">
+                <h2 className="text-2xl font-bold">سجل الحضور والمحاضرات 📅</h2>
+                {currentUser?.academicGroup && (
+                  <span className="bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-xs font-black">
+                    🔬 كروبك الدراسي: {currentUser.academicGroup}
+                  </span>
+                )}
+              </div>
               <p className="opacity-90 text-sm">
-                تابع حضورك في محاضرات الجدول الأسبوعي لكل مادة، ويمكنك تحميل تقرير حضورك الشهري أو الفصلي بصيغة PDF.
+                تابع حضورك في محاضرات الجدول الأسبوعي ومحاضرات كروبك الخاصة، ويمكنك تحميل تقرير حضورك بصيغة PDF.
               </p>
             </div>
             {currentUser && (
@@ -7171,11 +8051,20 @@ export default function App() {
           <div className="grid gap-6 md:grid-cols-2">
             {courses.map((course) => {
               const courseSessions = attendanceSessions
-                .filter(
-                  (s) =>
+                .filter((s) => {
+                  const matchesCourse =
                     s.courseId === course.id ||
-                    (s.courseName && s.courseName.trim() === course.name.trim())
-                )
+                    (s.courseName &&
+                      s.courseName.trim() === course.name.trim());
+                  if (!matchesCourse) return false;
+                  if (!s.targetGroup || s.targetGroup === "ALL") return true;
+                  if (!currentUser?.academicGroup) return true;
+                  if (s.targetGroup === currentUser.academicGroup) return true;
+                  return attendanceRecords.some(
+                    (r) =>
+                      r.sessionId === s.id && r.studentId === currentUser.uid
+                  );
+                })
                 .sort((a, b) => b.date.localeCompare(a.date));
 
               const studentRecords = attendanceRecords.filter(
@@ -7269,9 +8158,21 @@ export default function App() {
                               className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-xl bg-gray-50/80 dark:bg-slate-700/40"
                             >
                               <div className="min-w-0 pr-1">
-                                <span className="font-bold text-gray-700 dark:text-gray-200 block truncate">
-                                  {sess.title || `محاضرة ${sess.date}`}
-                                </span>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-bold text-gray-700 dark:text-gray-200 block truncate">
+                                    {sess.title || `محاضرة ${sess.date}`}
+                                  </span>
+                                  {sess.targetGroup && sess.targetGroup !== "ALL" && (
+                                    <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                                      {sess.targetGroup}
+                                    </span>
+                                  )}
+                                  {myRec?.isException && (
+                                    <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300">
+                                      استثناء/تبديل 🔄
+                                    </span>
+                                  )}
+                                </div>
                                 <span className="text-[10px] text-gray-400">
                                   {getArabicDayFromDateStr(sess.date)} ({sess.date})
                                   {sess.startTime ? ` • ${sess.startTime}` : ""}
@@ -8632,10 +9533,29 @@ export default function App() {
       (a, b) => parseTimeToMinutes(a.startTime) - parseTimeToMinutes(b.startTime)
     );
 
+    const groupFilteredSchedules = sortedSchedules.filter((s) => {
+      if (schedFilterGroup === "الكل") return true;
+      if (schedFilterGroup === "MY_GROUP" && currentUser?.academicGroup) {
+        return (
+          !s.targetGroup ||
+          s.targetGroup === "ALL" ||
+          s.targetGroup === currentUser.academicGroup
+        );
+      }
+      if (schedFilterGroup === "ALL_BATCH") {
+        return !s.targetGroup || s.targetGroup === "ALL";
+      }
+      return (
+        !s.targetGroup ||
+        s.targetGroup === "ALL" ||
+        s.targetGroup === schedFilterGroup
+      );
+    });
+
     const filteredSchedules =
       schedFilterDay === "الكل"
-        ? sortedSchedules
-        : sortedSchedules.filter((s) => s.day === schedFilterDay);
+        ? groupFilteredSchedules
+        : groupFilteredSchedules.filter((s) => s.day === schedFilterDay);
 
     const quickStartTimes = [
       "08:00 ص",
@@ -8680,6 +9600,7 @@ export default function App() {
       setSchedEndTime(item.endTime || "10:30 ص");
       setSchedHall(item.hall || "");
       setSchedLectureType(item.lectureType || "THEORY");
+      setSchedTargetGroup(item.targetGroup || "ALL");
       setSchedIsWeekly(item.isWeekly !== false);
       setSchedNote(item.note || "");
       setIsAddingSchedule(true);
@@ -8795,11 +9716,57 @@ export default function App() {
           </div>
         </div>
 
+        {/* Academic Groups Filter Bar */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar bg-white dark:bg-slate-800 p-3 rounded-2xl border border-gray-100 dark:border-slate-700">
+          <span className="text-xs font-black text-gray-500 dark:text-gray-400 flex items-center gap-1.5 shrink-0 ml-1">
+            <Users size={14} className="text-primary" />
+            <span>تصفية حسب الكروب:</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setSchedFilterGroup("الكل")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+              schedFilterGroup === "الكل"
+                ? "bg-indigo-600 text-white shadow-xs"
+                : "bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200"
+            }`}
+          >
+            كل المحاضرات والكروبات
+          </button>
+          {currentUser?.academicGroup && (
+            <button
+              type="button"
+              onClick={() => setSchedFilterGroup("MY_GROUP")}
+              className={`px-3 py-1.5 rounded-xl text-xs font-black transition whitespace-nowrap flex items-center gap-1 ${
+                schedFilterGroup === "MY_GROUP"
+                  ? "bg-emerald-600 text-white shadow-xs"
+                  : "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50"
+              }`}
+            >
+              <span>جدول كروبي ({currentUser.academicGroup}) 📍</span>
+            </button>
+          )}
+          {batchAcademicGroups.map((grp) => (
+            <button
+              key={grp}
+              type="button"
+              onClick={() => setSchedFilterGroup(grp)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                schedFilterGroup === grp
+                  ? "bg-indigo-600 text-white shadow-xs"
+                  : "bg-gray-50 dark:bg-slate-700/70 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-slate-600 hover:border-indigo-400"
+              }`}
+            >
+              👥 {grp} + العام
+            </button>
+          ))}
+        </div>
+
         {/* WEEKLY TIMETABLE VIEW (Grouped by Day, Ordered by Start Time) */}
         {scheduleViewMode === "WEEKLY_GRID" && schedFilterDay === "الكل" ? (
           <div className="space-y-4">
             {weekDays.map((dayName) => {
-              const dayLectures = sortedSchedules.filter((s) => s.day === dayName);
+              const dayLectures = groupFilteredSchedules.filter((s) => s.day === dayName);
               const isToday = dayName === currentArabicDay;
 
               if (dayLectures.length === 0 && !isManager) {
@@ -8906,6 +9873,18 @@ export default function App() {
                                   }`}
                                 >
                                   {item.lectureType === "PRACTICAL" ? "عملي / مختبر 🔬" : "نظري 📖"}
+                                </span>
+                                <span
+                                  className={`text-[10px] font-black px-2.5 py-0.5 rounded-lg flex items-center gap-1 ${
+                                    item.targetGroup && item.targetGroup !== "ALL"
+                                      ? "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60"
+                                      : "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300"
+                                  }`}
+                                >
+                                  <Users size={11} />
+                                  {item.targetGroup && item.targetGroup !== "ALL"
+                                    ? `خاص بـ (${item.targetGroup})`
+                                    : "للدفعة كاملة (عام)"}
                                 </span>
                                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
                                   🔄 تتكرر أسبوعياً
@@ -9062,6 +10041,18 @@ export default function App() {
                         }`}
                       >
                         {item.lectureType === "PRACTICAL" ? "عملي / مختبر 🔬" : "نظري 📖"}
+                      </span>
+                      <span
+                        className={`text-[10px] font-black px-2.5 py-1 rounded-lg flex items-center gap-1 ${
+                          item.targetGroup && item.targetGroup !== "ALL"
+                            ? "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"
+                            : "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300"
+                        }`}
+                      >
+                        <Users size={11} />
+                        {item.targetGroup && item.targetGroup !== "ALL"
+                          ? `خاص بـ (${item.targetGroup})`
+                          : "للدفعة كاملة"}
                       </span>
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
                         🔄 أسبوعي ثابت
@@ -9344,6 +10335,44 @@ export default function App() {
                       </button>
                     </div>
                   </div>
+                </div>
+
+                {/* 2.b Target Academic Group (All Batch vs Specific Group) */}
+                <div className="p-3.5 rounded-2xl bg-amber-50/50 dark:bg-slate-700/40 border border-amber-200/70 dark:border-slate-600 space-y-2">
+                  <label className="text-xs font-black text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
+                    <Users size={14} className="text-amber-600" />
+                    <span>الفئة / الكروب المشمول بهذه المحاضرة:</span>
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSchedTargetGroup("ALL")}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${
+                        schedTargetGroup === "ALL" || !schedTargetGroup
+                          ? "bg-indigo-600 text-white shadow-xs"
+                          : "bg-white dark:bg-slate-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-slate-600"
+                      }`}
+                    >
+                      👥 الدفعة كاملة (كل الكروبات)
+                    </button>
+                    {batchAcademicGroups.map((grp) => (
+                      <button
+                        key={grp}
+                        type="button"
+                        onClick={() => setSchedTargetGroup(grp)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black transition ${
+                          schedTargetGroup === grp
+                            ? "bg-amber-600 text-white shadow-xs"
+                            : "bg-white dark:bg-slate-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-slate-600 hover:border-amber-400"
+                        }`}
+                      >
+                        🔬 {grp} فقط
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                    * إذا اخترت كروباً محدداً (مثل كروب A)، فسيظهر طلاب هذا الكروب تلقائياً عند تسجيل الحضور مع إمكانية إضافة استثناءات وتبديل.
+                  </p>
                 </div>
 
                 {/* 3. Lecture Start Time & End Time (With Time Picker + 1-Tap Presets) */}
@@ -9747,17 +10776,19 @@ export default function App() {
       (s) => !assignedGroupMap.has(s.uid) && !newGroupMembers.includes(s.uid)
     );
 
-    const displayedStudentsForGroup = batchStudents.filter((s) => {
-      const q = groupMemberSearch.toLowerCase();
-      const matchesQuery =
-        s.name.toLowerCase().includes(q) ||
-        (s.username && s.username.toLowerCase().includes(q));
-      if (!matchesQuery) return false;
-      if (groupMemberFilter === "unassigned") {
-        return !assignedGroupMap.has(s.uid);
-      }
-      return true;
-    });
+    const displayedStudentsForGroup = batchStudents
+      .filter((s) => {
+        const q = groupMemberSearch.toLowerCase();
+        const matchesQuery =
+          s.name.toLowerCase().includes(q) ||
+          (s.username && s.username.toLowerCase().includes(q));
+        if (!matchesQuery) return false;
+        if (groupMemberFilter === "unassigned") {
+          return !assignedGroupMap.has(s.uid);
+        }
+        return true;
+      })
+      .sort((a, b) => compareArabicNames(a.name, b.name));
 
     return (
       <div className="space-y-6 p-4 animate-in slide-in-from-bottom-4 duration-500">
@@ -10151,9 +11182,9 @@ export default function App() {
                           const isMyGroupItem = group.members.includes(currentUser?.uid || "");
                           const canUploadToGroup = isManager || isMyGroupItem;
                           const groupLeader = appUsers.find((u) => u.uid === group.leaderId);
-                          const membersData = appUsers.filter((u) =>
-                            group.members.includes(u.uid)
-                          );
+                          const membersData = appUsers
+                            .filter((u) => group.members.includes(u.uid))
+                            .sort((a, b) => compareArabicNames(a.name, b.name));
                           const groupFiles = group.files || [];
                           const isUploadingThisGroup =
                             uploadingProjectTargetKey === `${project.id}_${group.id}`;
@@ -11922,6 +12953,9 @@ export default function App() {
     const totalBatchCount = batchStudents.length;
     const includedCount = batchStudents.filter((u) => !u.excludeFromStats).length;
     const excludedCount = batchStudents.filter((u) => !!u.excludeFromStats).length;
+    const unassignedGroupCount = batchStudents.filter(
+      (u) => !u.excludeFromStats && !u.academicGroup
+    ).length;
 
     // Filter by inclusion tab
     const filteredByInclusion = batchStudents.filter((u) => {
@@ -11930,16 +12964,26 @@ export default function App() {
       return true;
     });
 
+    // Filter by academic group
+    const filteredByGroup = filteredByInclusion.filter((u) => {
+      if (studentGroupFilter === "ALL") return true;
+      if (studentGroupFilter === "UNASSIGNED") return !u.academicGroup;
+      return u.academicGroup === studentGroupFilter;
+    });
+
     // Filter by search
-    const displayedStudents = filteredByInclusion.filter((u) => {
-      if (!studentDirectorySearch.trim()) return true;
-      const q = studentDirectorySearch.toLowerCase();
-      return (
-        u.name.toLowerCase().includes(q) ||
-        (u.username && u.username.toLowerCase().includes(q)) ||
-        (u.email && u.email.toLowerCase().includes(q))
-      );
-    }).sort((a, b) => a.name.localeCompare(b.name, "ar", { sensitivity: "base" }));
+    const displayedStudents = filteredByGroup
+      .filter((u) => {
+        if (!studentDirectorySearch.trim()) return true;
+        const q = studentDirectorySearch.toLowerCase();
+        return (
+          u.name.toLowerCase().includes(q) ||
+          (u.username && u.username.toLowerCase().includes(q)) ||
+          (u.email && u.email.toLowerCase().includes(q)) ||
+          (u.academicGroup && u.academicGroup.toLowerCase().includes(q))
+        );
+      })
+      .sort((a, b) => compareArabicNames(a.name, b.name));
 
     return (
       <div className="space-y-6 p-4 pb-20">
@@ -11948,10 +12992,10 @@ export default function App() {
           <div>
             <h2 className="text-xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
               <Users className="text-primary" size={24} />
-              <span>إدارة طلاب وأعضاء الدفعة</span>
+              <span>إدارة طلاب وكروبات الدفعة</span>
             </h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              إدارة حسابات طلاب دفعة ({effectiveBatchCode})، تحديد المشمولين في الإحصائيات وقوائم الحضور، وتعيين الممثل المعاون.
+              إدارة حسابات طلاب دفعة ({effectiveBatchCode})، تقسيم الكروبات الدراسية الثابتة (A, B, C...)، وتحديد المشمولين بالحصول على الإحصائيات والحضور.
             </p>
           </div>
 
@@ -11966,11 +13010,179 @@ export default function App() {
               <span>مشمول بالإحصائيات:</span>
               <span className="font-mono text-sm">{includedCount}</span>
             </div>
-            {excludedCount > 0 && (
-              <div className="bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 px-3.5 py-1.5 rounded-xl flex items-center gap-1.5 shadow-sm">
-                <span className="w-2 h-2 rounded-full bg-gray-400"></span>
-                <span>مستثنى:</span>
-                <span className="font-mono text-sm">{excludedCount}</span>
+            <button
+              type="button"
+              onClick={() => setIsManagingAcademicGroups(!isManagingAcademicGroups)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-1.5 rounded-xl flex items-center gap-1.5 shadow-sm transition active:scale-95"
+            >
+              <Layers size={14} />
+              <span>إدارة وتوزيع الكروبات ({batchAcademicGroups.length})</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Academic Groups Management Hub */}
+        <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-indigo-100 dark:border-slate-700 overflow-hidden">
+          <div className="p-5 bg-gradient-to-r from-indigo-50/80 via-blue-50/50 to-purple-50/80 dark:from-slate-800 dark:to-slate-800 border-b border-indigo-100/80 dark:border-slate-700 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-black text-gray-800 dark:text-white text-base flex items-center gap-2">
+                  <Layers size={19} className="text-indigo-600 dark:text-indigo-400" />
+                  <span>نظام الكروبات الدراسية الثابتة (تلقائي مع الجدول والحضور) 🔬</span>
+                </h3>
+                <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                  ثابت لكل طالب + يدعم الاستثناءات
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                وزّع الطلاب على كروباتهم الرسمية (مثل كروب A، كروب B...) مرة واحدة، وعند فتح أي محاضرة لكروب معين في الجدول سيظهر طلاب هذا الكروب تلقائياً مع إمكانية استثناء أو تبديل أي طالب!
+              </p>
+            </div>
+
+            {isManager && (
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleAutoDistributeStudentsIntoGroups(batchAcademicGroups.slice(0, 2))
+                  }
+                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm transition flex items-center gap-1.5 active:scale-95"
+                  title="تقسيم الطلاب المشمولين أبجدياً بالتساوي على أول كروبين (A و B)"
+                >
+                  <Sparkles size={14} />
+                  <span>توزيع أبجدي تلقائي (كروبين A & B)</span>
+                </button>
+                {batchAcademicGroups.length >= 3 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleAutoDistributeStudentsIntoGroups(batchAcademicGroups.slice(0, 3))
+                    }
+                    className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-sm transition flex items-center gap-1.5 active:scale-95"
+                  >
+                    <Sparkles size={14} />
+                    <span>توزيع على 3 كروبات (A, B, C)</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsManagingAcademicGroups(!isManagingAcademicGroups)}
+                  className="px-3 py-2 bg-white dark:bg-slate-700 text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-slate-600 rounded-xl text-xs font-bold hover:bg-gray-50 transition"
+                >
+                  {isManagingAcademicGroups ? "إخفاء إعدادات الكروبات" : "تخصيص أسماء الكروبات ⚙️"}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Group Filter & Stats Cards */}
+          <div className="p-4 bg-white dark:bg-slate-800">
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
+              <button
+                type="button"
+                onClick={() => setStudentGroupFilter("ALL")}
+                className={`px-3.5 py-2 rounded-2xl text-xs font-black transition whitespace-nowrap flex items-center gap-1.5 border ${
+                  studentGroupFilter === "ALL"
+                    ? "bg-primary text-white border-primary shadow-sm"
+                    : "bg-gray-50 dark:bg-slate-700/60 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-slate-600 hover:bg-gray-100"
+                }`}
+              >
+                <Users size={14} />
+                <span>كل الكروبات ({includedCount})</span>
+              </button>
+
+              {batchAcademicGroups.map((grp) => {
+                const countInGrp = batchStudents.filter(
+                  (u) => !u.excludeFromStats && u.academicGroup === grp
+                ).length;
+                const isSelected = studentGroupFilter === grp;
+                return (
+                  <button
+                    key={grp}
+                    type="button"
+                    onClick={() => setStudentGroupFilter(grp)}
+                    className={`px-3.5 py-2 rounded-2xl text-xs font-black transition whitespace-nowrap flex items-center gap-2 border ${
+                      isSelected
+                        ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                        : "bg-indigo-50/60 dark:bg-indigo-950/30 text-indigo-800 dark:text-indigo-300 border-indigo-200/70 dark:border-indigo-800/50 hover:bg-indigo-100/70"
+                    }`}
+                  >
+                    <span>🔬 {grp}</span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                        isSelected
+                          ? "bg-white/20 text-white"
+                          : "bg-indigo-200/70 dark:bg-indigo-900 text-indigo-900 dark:text-indigo-200"
+                      }`}
+                    >
+                      {countInGrp} طالب
+                    </span>
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => setStudentGroupFilter("UNASSIGNED")}
+                className={`px-3.5 py-2 rounded-2xl text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 border ${
+                  studentGroupFilter === "UNASSIGNED"
+                    ? "bg-amber-500 text-white border-amber-500 shadow-sm"
+                    : "bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800/50"
+                }`}
+              >
+                <span>بدون كروب محدد</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/10">
+                  {unassignedGroupCount}
+                </span>
+              </button>
+            </div>
+
+            {/* Expandable Custom Group Name Editor */}
+            {isManagingAcademicGroups && isManager && (
+              <div className="mt-4 pt-4 border-t border-gray-100 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400">
+                    الكروبات المعتمدة حالياً:
+                  </span>
+                  {batchAcademicGroups.map((grp) => (
+                    <span
+                      key={grp}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-gray-100 dark:bg-slate-700 text-gray-800 dark:text-white text-xs font-bold"
+                    >
+                      <span>{grp}</span>
+                      {batchAcademicGroups.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveBatchAcademicGroup(grp)}
+                          className="text-gray-400 hover:text-red-500"
+                          title="حذف الكروب من القائمة"
+                        >
+                          <X size={13} />
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newCustomGroupName}
+                    onChange={(e) => setNewCustomGroupName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleAddBatchAcademicGroup();
+                    }}
+                    placeholder="إضافة كروب جديد (مثال: كروب E)"
+                    className="bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-1.5 text-xs outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddBatchAcademicGroup}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold transition shrink-0"
+                  >
+                    + إضافة كروب
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -11982,8 +13194,7 @@ export default function App() {
           <div>
             <span className="font-black">ملاحظة تنظيمية للممثل: </span>
             <span>
-              جميع الطلاب المنضمين للدفعة (بما في ذلك الحسابات المسجلة عبر Google) مشمولون تلقائياً بالإحصائيات وقوائم الحضور والدرجات.
-              إذا كان هناك حساب تجريبي، أو حساب أستاذ/مشرف، يمكنك الضغط على <strong>"استثناء من الإحصائيات"</strong> لكي لا يؤثر على نسب الحضور ومعدلات السعايات.
+              حدد الكروب الدراسي الثابت لكل طالب من القائمة المنسدلة أمام اسمه (أو استخدم زر التوزيع التلقائي أعلاه). عند تسجيل الحضور لأي محاضرة مخصصة لكروب معين، سيظهر طلاب ذلك الكروب مباشرة، ويمكنك من داخل المحاضرة تسجيل حضور استثنائي أو تبديل لطالب من كروب آخر ليوم واحد دون تغيير كروبه الأصلي.
             </span>
           </div>
         </div>
@@ -11999,7 +13210,7 @@ export default function App() {
               type="text"
               value={studentDirectorySearch}
               onChange={(e) => setStudentDirectorySearch(e.target.value)}
-              placeholder="ابحث عن طالب بالاسم، البريد الإلكتروني، أو المعرف..."
+              placeholder="ابحث عن طالب بالاسم، الكروب، البريد الإلكتروني، أو المعرف..."
               className="w-full bg-gray-50 dark:bg-slate-700/60 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl pr-10 pl-4 py-2 text-xs outline-none"
             />
           </div>
@@ -12049,16 +13260,19 @@ export default function App() {
 
         {/* 1. Batch Students List */}
         <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 overflow-hidden">
-          <div className="p-5 border-b border-gray-50 dark:border-slate-700 bg-gray-50/50 dark:bg-slate-700/30 flex justify-between items-center">
+          <div className="p-5 border-b border-gray-50 dark:border-slate-700 bg-gray-50/50 dark:bg-slate-700/30 flex justify-between items-center flex-wrap gap-2">
             <div>
-              <h3 className="font-bold text-gray-800 dark:text-white text-sm flex items-center gap-2">
+              <h3 className="font-bold text-gray-800 dark:text-white text-sm flex items-center gap-2 flex-wrap">
                 <span>قائمة طلاب وأعضاء الدفعة</span>
                 <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-primary/10 text-primary">
                   {displayedStudents.length}
                 </span>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50">
+                  مرتبة أبجدياً تلقائياً (أ - ي)
+                </span>
               </h3>
               <p className="text-[11px] text-gray-400 mt-0.5">
-                تتضمن الحسابات المسجلة وحسابات Google وقوائم الحضور والدرجات، مرتبة هجائياً.
+                تتضمن الحسابات المسجلة وحسابات Google وقوائم الحضور والدرجات، مرتبة أبجدياً بشكل دائم.
               </p>
             </div>
           </div>
@@ -12094,6 +13308,11 @@ export default function App() {
                             <p className="font-bold text-sm text-gray-800 dark:text-white hover:text-primary transition">
                               {student.name}
                             </p>
+                            {student.academicGroup && (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/50">
+                                🔬 {student.academicGroup}
+                              </span>
+                            )}
                             {isRep && (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 flex items-center gap-1">
                                 <Crown size={11} />
@@ -12134,6 +13353,27 @@ export default function App() {
                       {/* Action buttons for Managers / Representative */}
                       {isManager && (
                         <div className="flex items-center gap-2 self-end md:self-center flex-wrap">
+                          {/* Permanent Academic Group Selector */}
+                          <select
+                            value={student.academicGroup || ""}
+                            onChange={(e) =>
+                              handleAssignStudentAcademicGroup(student, e.target.value)
+                            }
+                            className={`px-2.5 py-1.5 rounded-xl text-xs font-black border outline-none cursor-pointer transition ${
+                              student.academicGroup
+                                ? "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800/50"
+                                : "bg-gray-50 text-gray-500 border-gray-200 dark:bg-slate-700 dark:text-gray-300 dark:border-slate-600"
+                            }`}
+                            title="تحديد أو تغيير الكروب الدراسي الثابت لهذا الطالب"
+                          >
+                            <option value="">-- اختر الكروب --</option>
+                            {batchAcademicGroups.map((grp) => (
+                              <option key={grp} value={grp}>
+                                🔬 {grp}
+                              </option>
+                            ))}
+                          </select>
+
                           {/* PDF Attendance Report Button */}
                           <button
                             onClick={() => setAttendanceReportStudent(student)}
@@ -12224,9 +13464,9 @@ export default function App() {
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700">
           <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-4 flex items-center gap-2">
             <UserPlus size={18} className="text-primary" />
-            إضافة اسم طالب يدوياً (يظهر في الحضور، الدرجات، والمشاريع)
+            إضافة اسم طالب يدوياً مع كروبه الدراسي (يظهر في الحضور، الدرجات، والمشاريع)
           </h3>
-          <div className="flex items-end gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-end gap-3">
             <div className="flex-1">
               <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
                 الاسم الثلاثي للطالب
@@ -12241,6 +13481,23 @@ export default function App() {
                 className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2 text-sm outline-none"
                 placeholder="مثال: أحمد علي محمد..."
               />
+            </div>
+            <div className="sm:w-48">
+              <label className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1 block">
+                الكروب الدراسي الثابت
+              </label>
+              <select
+                value={newStudentGroup}
+                onChange={(e) => setNewStudentGroup(e.target.value)}
+                className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2 text-sm font-bold outline-none cursor-pointer h-10"
+              >
+                <option value="">-- بدون كروب محدد --</option>
+                {batchAcademicGroups.map((grp) => (
+                  <option key={grp} value={grp}>
+                    🔬 {grp}
+                  </option>
+                ))}
+              </select>
             </div>
             <button
               onClick={handleAddStudent}
@@ -12258,9 +13515,14 @@ export default function App() {
         <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 overflow-hidden">
           <div className="p-5 border-b border-gray-50 dark:border-slate-700 bg-gray-50/50 dark:bg-slate-700/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
-              <h3 className="font-bold text-gray-800 dark:text-white text-sm">
-                قائمة الطلاب المضافين يدوياً بدون حساب ({officialStudents.length})
-              </h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-bold text-gray-800 dark:text-white text-sm">
+                  قائمة الطلاب المضافين يدوياً بدون حساب ({officialStudents.length})
+                </h3>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50">
+                  مرتبة أبجدياً (أ - ي)
+                </span>
+              </div>
               <p className="text-[11px] text-gray-400 mt-0.5">
                 يمكنك ربط أي اسم هنا بحساب الطالب الفعلي فور تسجيله في المنصة لنقل كافة بياناته وإحصائياته.
               </p>
@@ -12269,7 +13531,9 @@ export default function App() {
           <div>
             {officialStudents.length > 0 ? (
               <div className="divide-y divide-gray-50 dark:divide-slate-700">
-                {officialStudents.map((student) => (
+                {[...officialStudents]
+                  .sort((a, b) => compareArabicNames(a.name, b.name))
+                  .map((student, idx) => (
                   <div
                     key={student.uid}
                     className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-gray-50 dark:hover:bg-slate-700/50 transition"
@@ -12278,15 +13542,25 @@ export default function App() {
                       className="flex items-center gap-3 cursor-pointer"
                       onClick={() => handleViewProfile(student.uid)}
                     >
+                      <span className="w-6 text-center text-xs font-bold text-gray-400 shrink-0">
+                        {idx + 1}
+                      </span>
                       <img
                         src={student.avatar}
                         className="w-10 h-10 rounded-full border border-gray-100 dark:border-slate-600"
                         alt=""
                       />
                       <div>
-                        <p className="font-bold text-sm text-gray-800 dark:text-white group-hover:text-primary transition">
-                          {student.name}
-                        </p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-bold text-sm text-gray-800 dark:text-white group-hover:text-primary transition">
+                            {student.name}
+                          </p>
+                          {student.academicGroup && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300">
+                              🔬 {student.academicGroup}
+                            </span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
                           <span className="bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 px-2 py-0.5 rounded-md font-bold text-[10px]">
                             مضاف يدوياً بالسجل (مشروع / حضور / درجات)
@@ -12294,7 +13568,24 @@ export default function App() {
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 self-end sm:self-center">
+                    <div className="flex items-center gap-2 self-end sm:self-center flex-wrap">
+                      {isManager && (
+                        <select
+                          value={student.academicGroup || ""}
+                          onChange={(e) =>
+                            handleAssignStudentAcademicGroup(student, e.target.value)
+                          }
+                          className="px-2.5 py-2 rounded-xl text-xs font-black border bg-indigo-50/70 text-indigo-700 border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800/50 outline-none cursor-pointer"
+                          title="تحديد أو تغيير الكروب الدراسي لهذا الطالب"
+                        >
+                          <option value="">-- اختر الكروب --</option>
+                          {batchAcademicGroups.map((grp) => (
+                            <option key={grp} value={grp}>
+                              🔬 {grp}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                       <button
                         onClick={() => setAttendanceReportStudent(student)}
                         className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300 border border-blue-200 dark:border-blue-800/40 rounded-xl text-xs font-bold transition flex items-center gap-1.5 active:scale-95"

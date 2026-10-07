@@ -32,6 +32,7 @@ import {
   transferRepresentation,
   dismissRepresentative,
   saveBatchToFirestore,
+  compareArabicNames,
 } from '../services/firebase';
 
 interface RepresentativeManagerModalProps {
@@ -1234,6 +1235,7 @@ export const RepresentativeManagerModal: React.FC<RepresentativeManagerModalProp
                   <option value="">-- اختر طالباً --</option>
                   {users
                     .filter((u) => u.role !== UserRole.OWNER && u.uid !== transferBatch.representativeUid)
+                    .sort((a, b) => compareArabicNames(a.name, b.name))
                     .map((u) => (
                       <option key={u.uid} value={u.uid}>
                         {u.name} (@{u.username || 'طالب'}) - {u.batchCode === transferBatch.code ? 'نفس الدفعة' : `دفعة ${u.batchCode || 'عام'}`}

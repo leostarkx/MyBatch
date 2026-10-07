@@ -30,6 +30,7 @@ import {
   Material,
   AssessmentStructure,
 } from "../types";
+import { compareArabicNames } from "../services/firebase";
 
 interface BatchLeaderboardProps {
   currentUser: User | null;
@@ -86,14 +87,16 @@ export const BatchLeaderboard: React.FC<BatchLeaderboardProps> = ({
 
   // Eligible batch students (registered + official, excluding owner & excluded accounts)
   const batchStudents = useMemo(() => {
-    return users.filter((u) => {
-      if (u.role === UserRole.OWNER) return false;
-      if (u.excludeFromStats) return false;
-      if (u.batchCode === effectiveBatchCode) return true;
-      if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode))
-        return true;
-      return false;
-    });
+    return users
+      .filter((u) => {
+        if (u.role === UserRole.OWNER) return false;
+        if (u.excludeFromStats) return false;
+        if (u.batchCode === effectiveBatchCode) return true;
+        if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode))
+          return true;
+        return false;
+      })
+      .sort((a, b) => compareArabicNames(a.name, b.name));
   }, [users, effectiveBatchCode]);
 
   // Available assessments for the selected course (or across all courses)
@@ -143,9 +146,25 @@ export const BatchLeaderboard: React.FC<BatchLeaderboardProps> = ({
         : courses.filter((c) => c.id === selectedCourseId);
 
     return batchStudents.map((student) => {
-      // 1. Attendance Metrics
+      // 1. Attendance Metrics (Group-aware: count sessions for ALL, student's academicGroup, or where student has an explicit record/exception)
+      const studentRelevantSessions = relevantSessions.filter((s) => {
+        const hasRec = records.some(
+          (r) => r.sessionId === s.id && r.studentId === student.uid
+        );
+        if (hasRec) return true;
+        if (s.targetGroup && s.targetGroup !== "ALL") {
+          return student.academicGroup === s.targetGroup;
+        }
+        return true;
+      });
+      const studentTotalSessionsCount = studentRelevantSessions.length;
+      const studentSessionIdsSet = new Set(
+        studentRelevantSessions.map((s) => s.id)
+      );
+
       const stRecords = records.filter(
-        (r) => r.studentId === student.uid && sessionIdsSet.has(r.sessionId)
+        (r) =>
+          r.studentId === student.uid && studentSessionIdsSet.has(r.sessionId)
       );
       const presentCount = stRecords.filter(
         (r) => r.status === "PRESENT"
@@ -156,16 +175,18 @@ export const BatchLeaderboard: React.FC<BatchLeaderboardProps> = ({
       ).length;
 
       const attendanceRate =
-        totalSessionsCount > 0
-          ? Math.round(((presentCount + excusedCount) / totalSessionsCount) * 100)
+        studentTotalSessionsCount > 0
+          ? Math.round(
+              ((presentCount + excusedCount) / studentTotalSessionsCount) * 100
+            )
           : 0;
       const purePresentRate =
-        totalSessionsCount > 0
-          ? Math.round((presentCount / totalSessionsCount) * 100)
+        studentTotalSessionsCount > 0
+          ? Math.round((presentCount / studentTotalSessionsCount) * 100)
           : 0;
       const absenceRate =
-        totalSessionsCount > 0
-          ? Math.round((absentCount / totalSessionsCount) * 100)
+        studentTotalSessionsCount > 0
+          ? Math.round((absentCount / studentTotalSessionsCount) * 100)
           : 0;
 
       // 2. Cumulative Grades (السعي من 50)

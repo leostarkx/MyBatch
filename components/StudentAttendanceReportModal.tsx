@@ -20,6 +20,7 @@ import {
   Batch,
 } from "../types";
 import { BatchLogo } from "./BatchLogo";
+import { compareArabicNames } from "../services/firebase";
 
 interface StudentAttendanceReportModalProps {
   isOpen: boolean;
@@ -112,11 +113,18 @@ export const StudentAttendanceReportModal: React.FC<
   const targetStudent =
     allStudents.find((s) => s.uid === selectedStudentUid) || initialStudent;
 
-  // Filter sessions based on period (Semester = all sessions, Monthly = YYYY-MM match)
+  // Filter sessions based on period AND whether the session applies to this student's academic group (or student has an explicit record/exception)
   const filteredSessions = attendanceSessions
     .filter((s) => {
       if (reportPeriodType === "MONTHLY") {
-        return s.date && s.date.startsWith(selectedMonth);
+        if (!s.date || !s.date.startsWith(selectedMonth)) return false;
+      }
+      const hasStudentRecord = attendanceRecords.some(
+        (r) => r.sessionId === s.id && r.studentId === targetStudent.uid
+      );
+      if (hasStudentRecord) return true;
+      if (s.targetGroup && s.targetGroup !== "ALL") {
+        return targetStudent.academicGroup === s.targetGroup;
       }
       return true;
     })
@@ -289,7 +297,9 @@ export const StudentAttendanceReportModal: React.FC<
                   onChange={(e) => setSelectedStudentUid(e.target.value)}
                   className="bg-transparent text-xs font-bold text-gray-800 dark:text-white outline-none cursor-pointer max-w-[170px]"
                 >
-                  {allStudents.map((st) => (
+                  {[...allStudents]
+                    .sort((a, b) => compareArabicNames(a.name, b.name))
+                    .map((st) => (
                     <option
                       key={st.uid}
                       value={st.uid}

@@ -74,6 +74,7 @@ export interface User {
   studentId?: string;
   batchCode?: string;
   pendingBatchCode?: string;
+  academicGroup?: string; // الكروب الدراسي الثابت للطالب (مثل: كروب A، كروب B...)
   avatar?: string;
   isOfficial?: boolean;
   excludeFromStats?: boolean;
@@ -95,6 +96,7 @@ export interface Batch {
   representativeUid?: string; // معرّف الممثل
   representativeName?: string; // اسم الممثل
   chatLocked?: boolean; // قفل/فتح الدردشة بيد الممثل
+  academicGroups?: string[]; // الكروبات الدراسية المعتمدة في الدفعة
   createdAt: number;
 }
 
@@ -111,6 +113,7 @@ export interface LectureSchedule {
   endTime: string;
   hall: string;
   lectureType?: 'THEORY' | 'PRACTICAL'; // نظري أو عملي/مختبر
+  targetGroup?: string; // 'ALL' (للدفعة كاملة) أو اسم كروب معين مثل 'كروب A'
   isWeekly?: boolean; // يتكرر كل أسبوع تلقائياً
   isCancelled?: boolean;
   note?: string;
@@ -208,6 +211,7 @@ export interface AttendanceSession {
   endTime?: string;
   hall?: string;
   lectureType?: 'THEORY' | 'PRACTICAL';
+  targetGroup?: string; // 'ALL' (للدفعة كاملة) أو اسم كروب معين مثل 'كروب A'
   createdBy?: string;
   timestamp?: number;
 }
@@ -219,6 +223,11 @@ export interface AttendanceRecord {
   sessionId: string;
   studentId: string;
   status: 'PRESENT' | 'ABSENT' | 'EXCUSED';
+  isException?: boolean; // حضور استثنائي أو تبديل مع كروب آخر لهذه المحاضرة
+  originalGroup?: string; // كروب الطالب الأصلي عند حضور الاستثناء
+  swappedWithStudentId?: string; // معرّف الطالب البديل في حال التبديل بين طالبين
+  swappedWithStudentName?: string; // اسم الطالب البديل
+  exceptionNote?: string; // سبب الاستثناء أو ملاحظة التبديل
   timestamp?: number;
 }
 
