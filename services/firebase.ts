@@ -845,28 +845,6 @@ export async function loginWithGoogle(): Promise<User | null> {
     throw err;
   }
 
-  const credential = GoogleAuthProvider.credentialFromResult(result);
-  if (credential?.accessToken) {
-    setCachedDriveToken(credential.accessToken);
-    try {
-      const driveInfo = await fetchDriveAccountInfo(credential.accessToken);
-      await saveSettingToFirestore('google_drive_storage', {
-        isConfigured: true,
-        email: driveInfo.email,
-        displayName: driveInfo.displayName,
-        photoUrl: driveInfo.photoUrl,
-        storageLimit: driveInfo.storageLimit,
-        storageUsage: driveInfo.storageUsage,
-        formattedLimit: driveInfo.formattedLimit,
-        formattedUsage: driveInfo.formattedUsage,
-        percentUsed: driveInfo.percentUsed,
-        updatedAt: Date.now(),
-      });
-    } catch (e) {
-      console.warn('Could not fetch Drive info on Google sign in:', e);
-    }
-  }
-
   return await resolveOrCreateAppUserFromFirebaseUser(result.user);
 }
 export async function logoutUser() { await signOut(auth); }

@@ -24,13 +24,16 @@ interface StudentAttendanceReportModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialStudent: User;
-  allStudents: User[];
-  isManager: boolean;
-  courses: Course[];
-  attendanceSessions: AttendanceSession[];
-  attendanceRecords: AttendanceRecord[];
+  allStudents?: User[];
+  isManager?: boolean;
+  canSelectOtherStudents?: boolean;
+  courses?: Course[];
+  attendanceSessions?: AttendanceSession[];
+  sessions?: AttendanceSession[];
+  attendanceRecords?: AttendanceRecord[];
+  records?: AttendanceRecord[];
   batch?: Batch;
-  batchCode: string;
+  batchCode?: string;
 }
 
 const ARABIC_MONTHS: { [key: string]: string } = {
@@ -54,14 +57,21 @@ export const StudentAttendanceReportModal: React.FC<
   isOpen,
   onClose,
   initialStudent,
-  allStudents,
-  isManager,
-  courses,
-  attendanceSessions,
-  attendanceRecords,
+  allStudents = [],
+  isManager: isManagerProp,
+  canSelectOtherStudents,
+  courses = [],
+  attendanceSessions: attendanceSessionsProp,
+  sessions,
+  attendanceRecords: attendanceRecordsProp,
+  records,
   batch,
-  batchCode,
+  batchCode: batchCodeProp,
 }) => {
+  const isManager = Boolean(isManagerProp ?? canSelectOtherStudents);
+  const attendanceSessions = attendanceSessionsProp || sessions || [];
+  const attendanceRecords = attendanceRecordsProp || records || [];
+  const batchCode = batchCodeProp || batch?.code || initialStudent.batchCode || "";
   const [selectedStudentUid, setSelectedStudentUid] = useState<string>(
     initialStudent.uid
   );

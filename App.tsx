@@ -11401,11 +11401,13 @@ export default function App() {
                   )
               : undefined
           }
+          isManager={isManager}
           canSelectOtherStudents={isManager}
           courses={courses}
-          sessions={attendanceSessions}
-          records={attendanceRecords}
+          attendanceSessions={attendanceSessions}
+          attendanceRecords={attendanceRecords}
           batch={batches.find((b) => b.code === effectiveBatchCode)}
+          batchCode={effectiveBatchCode || ""}
         />
       )}
 
