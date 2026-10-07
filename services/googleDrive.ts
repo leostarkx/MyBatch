@@ -87,41 +87,62 @@ export function formatBytes(bytes: number): string {
 /**
  * Fetch storage quota and user info from Google Drive API
  */
-export async function fetchDriveAccountInfo(token: string): Promise<DriveAccountInfo> {
-  const res = await fetch('https://www.googleapis.com/drive/v3/about?fields=user,storageQuota', {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-
-  if (!res.ok) {
-    const errorText = await res.text();
-    console.error('Drive about.get error:', errorText);
-    throw new Error('تعذر جلب بيانات مساحة التخزين من Google Drive');
-  }
-
-  const data = await res.json();
-  const quota = data.storageQuota || {};
-  const user = data.user || {};
-
-  const storageLimit = Number(quota.limit || 15 * 1024 * 1024 * 1024); // default 15GB
-  const storageUsage = Number(quota.usage || 0);
-  const storageUsageInDrive = Number(quota.usageInDrive || 0);
-
-  const percentUsed = storageLimit > 0 ? Math.min(100, Math.round((storageUsage / storageLimit) * 100)) : 0;
-
-  return {
-    email: user.emailAddress || '',
-    displayName: user.displayName || 'Google Drive',
-    photoUrl: user.photoLink || '',
-    storageLimit,
-    storageUsage,
-    storageUsageInDrive,
-    formattedLimit: formatBytes(storageLimit),
-    formattedUsage: formatBytes(storageUsage),
-    percentUsed,
+export async function fetchDriveAccountInfo(
+  token: string,
+  fallbackUser?: { email?: string | null; displayName?: string | null; photoURL?: string | null }
+): Promise<DriveAccountInfo> {
+  const defaultLimit = 15 * 1024 * 1024 * 1024; // 15GB standard Google Drive quota
+  const fallbackInfo: DriveAccountInfo = {
+    email: fallbackUser?.email || auth.currentUser?.email || '',
+    displayName: fallbackUser?.displayName || auth.currentUser?.displayName || 'Google Drive',
+    photoUrl: fallbackUser?.photoURL || auth.currentUser?.photoURL || '',
+    storageLimit: defaultLimit,
+    storageUsage: 0,
+    storageUsageInDrive: 0,
+    formattedLimit: formatBytes(defaultLimit),
+    formattedUsage: '0 GB',
+    percentUsed: 0,
     connectedAt: Date.now(),
   };
+
+  try {
+    const res = await fetch('https://www.googleapis.com/drive/v3/about?fields=user,storageQuota', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!res.ok) {
+      // With drive.file scope alone, about.get may return 403 insufficientPermissions.
+      // Gracefully return fallback account info from Firebase Auth user so file uploads still work!
+      return fallbackInfo;
+    }
+
+    const data = await res.json();
+    const quota = data.storageQuota || {};
+    const user = data.user || {};
+
+    const storageLimit = Number(quota.limit || defaultLimit);
+    const storageUsage = Number(quota.usage || 0);
+    const storageUsageInDrive = Number(quota.usageInDrive || 0);
+
+    const percentUsed = storageLimit > 0 ? Math.min(100, Math.round((storageUsage / storageLimit) * 100)) : 0;
+
+    return {
+      email: user.emailAddress || fallbackInfo.email,
+      displayName: user.displayName || fallbackInfo.displayName,
+      photoUrl: user.photoLink || fallbackInfo.photoUrl,
+      storageLimit,
+      storageUsage,
+      storageUsageInDrive,
+      formattedLimit: formatBytes(storageLimit),
+      formattedUsage: formatBytes(storageUsage),
+      percentUsed,
+      connectedAt: Date.now(),
+    };
+  } catch {
+    return fallbackInfo;
+  }
 }
 
 /**
@@ -252,8 +273,8 @@ export async function connectVaultSlot(slotId: number): Promise<StorageVaultSlot
   const token = credential.accessToken;
   slotTokens[slotId] = token;
 
-  // Fetch account quota
-  const accountInfo = await fetchDriveAccountInfo(token);
+  // Fetch account quota (falls back gracefully to result.user if drive.file scope restricts about.get)
+  const accountInfo = await fetchDriveAccountInfo(token, result.user);
 
   // Update current pool
   const currentPool = await getStoragePool();
