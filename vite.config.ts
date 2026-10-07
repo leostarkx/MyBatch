@@ -9,6 +9,7 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        hmr: false,
       },
       plugins: [
         react(),
@@ -82,7 +83,7 @@ export default defineConfig(({ mode }) => {
             ],
           },
           devOptions: {
-            enabled: true,
+            enabled: false,
             type: 'module',
           },
         }),

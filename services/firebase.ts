@@ -1,7 +1,16 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
+  onAuthStateChanged,
+  signOut,
+  User as FirebaseUser,
+} from 'firebase/auth';
 import { 
-  getFirestore, doc, getDocFromServer, getDocs, getDoc, setDoc, 
+  initializeFirestore, getFirestore, doc, getDocFromServer, getDocs, getDoc, setDoc, 
   deleteDoc, collection, onSnapshot, query, orderBy, where
 } from 'firebase/firestore';
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -20,18 +29,34 @@ import {
 
 // Initialize Firebase App
 export const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId);
+export const db = (() => {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        experimentalAutoDetectLongPolling: true,
+      },
+      (firebaseConfig as any).firestoreDatabaseId
+    );
+  } catch {
+    return getFirestore(app, (firebaseConfig as any).firestoreDatabaseId);
+  }
+})();
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({
+  prompt: 'select_account',
+});
 
 // Validate connection to Firestore as per guidelines
 async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
+    // Ignore transient offline/unavailable network states during initial boot
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration.");
+      console.warn("Firestore is currently operating in offline cache mode until connection is established.");
     }
   }
 }
@@ -129,8 +154,17 @@ export async function seedInitialDataIfEmpty() {
         await deleteDoc(d.ref);
       }
     }
-  } catch (error) {
-    console.error('Error during initial Firestore seeding:', error);
+  } catch (error: any) {
+    const msg = error?.message || String(error);
+    if (
+      error?.code === 'unavailable' ||
+      msg.includes('offline') ||
+      msg.includes('Could not reach Cloud Firestore')
+    ) {
+      console.warn('Skipping initial Firestore seed while connection is initializing.');
+      return;
+    }
+    console.warn('Initial Firestore seeding warning:', msg);
   }
 }
 
@@ -717,20 +751,97 @@ export async function isUsernameTaken(username: string): Promise<boolean> {
   return !snap.empty;
 }
 
+async function resolveOrCreateAppUserFromFirebaseUser(fbUser: FirebaseUser): Promise<User> {
+  const fallbackUser: User = {
+    uid: fbUser.uid,
+    name: fbUser.displayName || (fbUser.email ? fbUser.email.split('@')[0] : 'طالب Google'),
+    email: fbUser.email || '',
+    username: `student_${fbUser.uid.slice(0, 6).toLowerCase()}`,
+    role: UserRole.STUDENT,
+    batchCode: '',
+    avatar:
+      fbUser.photoURL ||
+      `https://ui-avatars.com/api/?name=${encodeURIComponent(
+        fbUser.displayName || 'Google'
+      )}&background=random`,
+    isOfficial: false,
+    bio: 'طالب مسجل عبر Google',
+    signatureColor: '#2563eb',
+  };
+
+  try {
+    const userRef = doc(db, 'users', fbUser.uid);
+    const userSnap = await getDoc(userRef);
+
+    if (userSnap.exists()) {
+      return userSnap.data() as User;
+    }
+
+    // Generate random username: student_XXXX
+    let username = `student_${Math.floor(1000 + Math.random() * 9000)}`;
+    let attempts = 0;
+    try {
+      while ((await isUsernameTaken(username)) && attempts < 5) {
+        username = `student_${Math.floor(1000 + Math.random() * 9000)}`;
+        attempts++;
+      }
+    } catch {
+      // Ignore username uniqueness check error if offline
+    }
+
+    const newUser: User = {
+      ...fallbackUser,
+      username,
+    };
+
+    await saveUserToFirestore(newUser);
+    return newUser;
+  } catch (fsErr) {
+    console.warn('Firestore read/write warning during Google login, using authenticated session:', fsErr);
+    return fallbackUser;
+  }
+}
+
+export async function checkGoogleRedirectResult(): Promise<User | null> {
+  try {
+    const result = await getRedirectResult(auth);
+    if (result && result.user) {
+      return await resolveOrCreateAppUserFromFirebaseUser(result.user);
+    }
+  } catch (err) {
+    console.warn('Redirect result check error:', err);
+  }
+  return null;
+}
+
 // Auth
 export async function loginWithGoogle(): Promise<User | null> {
   let result;
   try {
     result = await signInWithPopup(auth, googleProvider);
   } catch (err: any) {
+    const code = err?.code || '';
+    const msg = err?.message || '';
+
     if (
-      err?.code === 'auth/popup-closed-by-user' ||
-      err?.message?.includes('popup-closed-by-user') ||
-      err?.code === 'auth/cancelled-popup-request' ||
-      err?.message?.includes('cancelled-popup-request')
+      code === 'auth/popup-closed-by-user' ||
+      msg.includes('popup-closed-by-user') ||
+      code === 'auth/cancelled-popup-request' ||
+      msg.includes('cancelled-popup-request')
     ) {
       return null;
     }
+
+    // If popup is blocked on mobile browsers or strict webviews, automatically fall back to Redirect
+    if (
+      code === 'auth/popup-blocked' ||
+      msg.includes('popup-blocked') ||
+      code === 'auth/operation-not-supported-in-this-environment'
+    ) {
+      await signInWithRedirect(auth, googleProvider);
+      return null;
+    }
+
     throw err;
   }
 
@@ -756,34 +867,6 @@ export async function loginWithGoogle(): Promise<User | null> {
     }
   }
 
-  const fbUser = result.user;
-  const userRef = doc(db, 'users', fbUser.uid);
-  const userSnap = await getDoc(userRef);
-  
-  if (userSnap.exists()) return userSnap.data() as User;
-
-  // Generate random username: student_XXXX
-  let username = `student_${Math.floor(1000 + Math.random() * 9000)}`;
-  let attempts = 0;
-  
-  while (await isUsernameTaken(username) && attempts < 10) {
-    username = `student_${Math.floor(1000 + Math.random() * 9000)}`;
-    attempts++;
-  }
-
-  const user: User = {
-    uid: fbUser.uid,
-    name: fbUser.displayName || 'طالب Google',
-    email: fbUser.email || '',
-    username: username,
-    role: UserRole.STUDENT,
-    batchCode: '',
-    avatar: fbUser.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(fbUser.displayName || 'Google')}&background=random`,
-    isOfficial: false,
-    bio: 'طالب مسجل عبر Google',
-    signatureColor: '#2563eb'
-  };
-  await saveUserToFirestore(user);
-  return user;
+  return await resolveOrCreateAppUserFromFirebaseUser(result.user);
 }
 export async function logoutUser() { await signOut(auth); }

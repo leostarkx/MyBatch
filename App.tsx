@@ -210,6 +210,7 @@ import {
   deleteStudentSummaryFromFirestore,
   subscribeBatchSuggestions,
   loginWithGoogle,
+  checkGoogleRedirectResult,
   logoutUser,
   isUsernameTaken,
   subscribeRepresentativeCodes,
@@ -515,16 +516,37 @@ const AuthScreen: React.FC<AuthScreenProps> = ({
                 onLogin(gUser);
               }
             } catch (err: any) {
+              const code = err?.code || "";
+              const msg = err?.message || "";
               if (
-                err?.code === 'auth/popup-closed-by-user' ||
-                err?.message?.includes('popup-closed-by-user') ||
-                err?.code === 'auth/cancelled-popup-request' ||
-                err?.message?.includes('cancelled-popup-request')
+                code === "auth/popup-closed-by-user" ||
+                msg.includes("popup-closed-by-user") ||
+                code === "auth/cancelled-popup-request" ||
+                msg.includes("cancelled-popup-request")
               ) {
                 return;
               }
-              console.error(err);
-              setError("تعذر تسجيل الدخول بواسطة Google");
+              console.error("Google Sign-In Error:", err);
+              const currentHost = window.location.hostname;
+              if (
+                code === "auth/unauthorized-domain" ||
+                msg.includes("unauthorized-domain")
+              ) {
+                setError(
+                  `النطاق الحالي (${currentHost}) غير مضاف في مشروع Firebase (gen-lang-client-0243674326). يرجى إضافته في Authentication > Settings > Authorized domains بدون https://`
+                );
+              } else if (
+                code === "auth/operation-not-allowed" ||
+                msg.includes("operation-not-allowed")
+              ) {
+                setError(
+                  "تسجيل الدخول عبر Google غير مفعّل في Firebase Console (Authentication > Sign-in method > Google)."
+                );
+              } else {
+                setError(
+                  `تعذر تسجيل الدخول عبر Google (${code || "خطأ بالاتصال"}). تأكد من فتح الرابط في متصفح خارجي أو السماح بالنوافذ المنبثقة.`
+                );
+              }
             } finally {
               setIsLoading(false);
             }
@@ -905,6 +927,15 @@ export default function App() {
   useEffect(() => {
     // 1. Seed initial data to Firestore if empty
     seedInitialDataIfEmpty();
+
+    // 1.b Check if returning from a Google Sign-In Redirect (e.g. mobile browsers / Netlify)
+    checkGoogleRedirectResult().then((redirectUser) => {
+      if (redirectUser) {
+        localStorage.setItem("dafaaty_user_uid", redirectUser.uid);
+        setCurrentUser(redirectUser);
+        setLoadingApp(false);
+      }
+    });
 
     // 2. Realtime listeners
     const unsubUsers = subscribeUsers((users) => {
