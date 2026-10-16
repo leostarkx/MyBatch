@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Clock,
   AlertTriangle,
@@ -8,7 +8,6 @@ import {
   Award,
   Layers,
   ChevronLeft,
-  ChevronRight,
   Plus,
   Trash2,
   MapPin,
@@ -16,7 +15,12 @@ import {
   X,
   Sparkles,
   Flame,
+  Filter,
   Check,
+  CheckSquare,
+  ArrowRight,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { Assignment, CourseProject, Exam, User, Tab, Course } from '../types';
 
@@ -37,6 +41,7 @@ export interface DeadlineItem {
   id: string;
   sourceType: 'ASSIGNMENT' | 'EXAM' | 'PROJECT';
   title: string;
+  courseId?: string;
   courseName: string;
   timestamp: number;
   dateStr: string;
@@ -60,7 +65,14 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
   onToggleCompleteAssignment,
 }) => {
   const [currentTime, setCurrentTime] = useState(Date.now());
+
+  // Filter States
   const [filterType, setFilterType] = useState<'ALL' | 'ASSIGNMENT' | 'EXAM' | 'PROJECT'>('ALL');
+  const [filterTimeframe, setFilterTimeframe] = useState<'ALL' | 'URGENT_48H' | 'THIS_WEEK' | 'LATER' | 'OVERDUE'>('ALL');
+  const [filterCourseId, setFilterCourseId] = useState<string>('ALL');
+  const [hideCompleted, setHideCompleted] = useState<boolean>(false);
+
+  // Modals
   const [selectedExamDetails, setSelectedExamDetails] = useState<Exam | null>(null);
   const [isAddExamModalOpen, setIsAddExamModalOpen] = useState(false);
 
@@ -82,66 +94,113 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
   }, []);
 
   // Aggregate all items into unified deadlines
-  const allDeadlines: DeadlineItem[] = [];
+  const allDeadlines = useMemo(() => {
+    const list: DeadlineItem[] = [];
 
-  // 1. Assignments
-  assignments.forEach((a) => {
-    const isCompleted = a.completedBy?.includes(currentUser?.uid || '');
-    allDeadlines.push({
-      id: `assign_${a.id}`,
-      sourceType: 'ASSIGNMENT',
-      title: a.title,
-      courseName: a.courseName || 'مادة دراسية',
-      timestamp: a.dueTimestamp,
-      dateStr: a.dueDate,
-      isCompleted,
-      originalItem: a,
+    // 1. Assignments
+    assignments.forEach((a) => {
+      const isCompleted = Boolean(currentUser && a.completedBy?.includes(currentUser.uid));
+      list.push({
+        id: `assign_${a.id}`,
+        sourceType: 'ASSIGNMENT',
+        title: a.title,
+        courseId: a.courseId,
+        courseName: a.courseName || 'مادة دراسية',
+        timestamp: a.dueTimestamp,
+        dateStr: a.dueDate,
+        isCompleted,
+        originalItem: a,
+      });
     });
-  });
 
-  // 2. Exams
-  exams.forEach((e) => {
-    allDeadlines.push({
-      id: `exam_${e.id}`,
-      sourceType: 'EXAM',
-      title: e.title,
-      courseName: e.courseName || 'مادة دراسية',
-      timestamp: e.examTimestamp,
-      dateStr: e.examDate,
-      hall: e.hall,
-      topics: e.topics,
-      examType: e.type,
-      originalItem: e,
+    // 2. Exams
+    exams.forEach((e) => {
+      list.push({
+        id: `exam_${e.id}`,
+        sourceType: 'EXAM',
+        title: e.title,
+        courseId: e.courseId,
+        courseName: e.courseName || 'مادة دراسية',
+        timestamp: e.examTimestamp,
+        dateStr: e.examDate,
+        hall: e.hall,
+        topics: e.topics,
+        examType: e.type,
+        originalItem: e,
+      });
     });
-  });
 
-  // 3. Projects
-  projects.forEach((p) => {
-    if (p.deadline) {
-      const pTimestamp = new Date(p.deadline).getTime();
-      if (!isNaN(pTimestamp)) {
-        allDeadlines.push({
-          id: `project_${p.id}`,
-          sourceType: 'PROJECT',
-          title: p.title,
-          courseName: p.courseName || 'مشروع فصلي',
-          timestamp: pTimestamp,
-          dateStr: p.deadline,
-          originalItem: p,
-        });
+    // 3. Projects
+    projects.forEach((p) => {
+      if (p.deadline) {
+        const pTimestamp = new Date(p.deadline).getTime();
+        if (!isNaN(pTimestamp)) {
+          list.push({
+            id: `project_${p.id}`,
+            sourceType: 'PROJECT',
+            title: p.title,
+            courseId: p.courseId,
+            courseName: p.courseName || 'مشروع فصلي',
+            timestamp: pTimestamp,
+            dateStr: p.deadline,
+            originalItem: p,
+          });
+        }
       }
-    }
-  });
+    });
 
-  // Filter deadlines
-  const filtered = allDeadlines
-    .filter((d) => {
-      if (filterType !== 'ALL' && d.sourceType !== filterType) return false;
-      // Show upcoming, or recently expired within the last 12 hours
-      const diff = d.timestamp - currentTime;
-      return diff > -12 * 60 * 60 * 1000;
-    })
-    .sort((a, b) => a.timestamp - b.timestamp);
+    return list;
+  }, [assignments, exams, projects, currentUser]);
+
+  // Statistics calculation
+  const urgentCount = allDeadlines.filter((d) => {
+    const diff = d.timestamp - currentTime;
+    return diff > 0 && diff <= 48 * 60 * 60 * 1000;
+  }).length;
+
+  const thisWeekCount = allDeadlines.filter((d) => {
+    const diff = d.timestamp - currentTime;
+    return diff > 0 && diff <= 7 * 24 * 60 * 60 * 1000;
+  }).length;
+
+  const pendingAssignmentsCount = assignments.filter(
+    (a) => !a.completedBy?.includes(currentUser?.uid || '')
+  ).length;
+
+  // Filter deadlines with all criteria
+  const filtered = useMemo(() => {
+    return allDeadlines
+      .filter((d) => {
+        // 1. Source type filter
+        if (filterType !== 'ALL' && d.sourceType !== filterType) return false;
+
+        // 2. Course filter
+        if (filterCourseId !== 'ALL' && d.courseId !== filterCourseId) return false;
+
+        // 3. Hide completed assignments
+        if (hideCompleted && d.isCompleted) return false;
+
+        // 4. Timeframe filter
+        const diff = d.timestamp - currentTime;
+
+        if (filterTimeframe === 'URGENT_48H') {
+          return diff > 0 && diff <= 48 * 60 * 60 * 1000;
+        }
+        if (filterTimeframe === 'THIS_WEEK') {
+          return diff > 0 && diff <= 7 * 24 * 60 * 60 * 1000;
+        }
+        if (filterTimeframe === 'LATER') {
+          return diff > 7 * 24 * 60 * 60 * 1000;
+        }
+        if (filterTimeframe === 'OVERDUE') {
+          return diff <= 0 && diff > -48 * 60 * 60 * 1000;
+        }
+
+        // Default 'ALL': show upcoming, or recently expired within the last 18 hours
+        return diff > -18 * 60 * 60 * 1000;
+      })
+      .sort((a, b) => a.timestamp - b.timestamp);
+  }, [allDeadlines, filterType, filterCourseId, hideCompleted, filterTimeframe, currentTime]);
 
   // Helper for countdown formatting
   const getRemainingTime = (targetTimestamp: number) => {
@@ -216,113 +275,331 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
     }
   };
 
+  const handleResetFilters = () => {
+    setFilterType('ALL');
+    setFilterTimeframe('ALL');
+    setFilterCourseId('ALL');
+    setHideCompleted(false);
+  };
+
+  const isAnyFilterActive =
+    filterType !== 'ALL' ||
+    filterTimeframe !== 'ALL' ||
+    filterCourseId !== 'ALL' ||
+    hideCompleted;
+
   return (
-    <div className="space-y-3">
-      {/* Header & Controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-800 p-4 sm:p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 text-white flex items-center justify-center shadow-md shadow-orange-500/20 shrink-0 animate-pulse">
-            <Flame size={22} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base sm:text-lg font-bold text-gray-800 dark:text-white">
-                شريط العد التنازلي للمواعيد ⏳
-              </h2>
-              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-950/50 dark:text-orange-300">
-                مباشر لحظي
-              </span>
+    <div className="space-y-3.5">
+      {/* Header Banner & Counter Strip */}
+      <div className="bg-white dark:bg-slate-800 p-4 sm:p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 text-white flex items-center justify-center shadow-md shadow-orange-500/20 shrink-0">
+              <Flame size={22} className="animate-pulse" />
             </div>
-            <p className="text-xs text-gray-400 dark:text-gray-400 mt-0.5">
-              تتبع المتبقي بالثواني للواجبات، الامتحانات، وتسليم المشاريع لدفعتك
-            </p>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base sm:text-lg font-black text-gray-800 dark:text-white">
+                  شريط المواعيد والعد التنازلي المباشر ⏳
+                </h2>
+                <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-950/50 dark:text-orange-300">
+                  محدث لحظياً
+                </span>
+              </div>
+              <p className="text-xs text-gray-400 mt-0.5">
+                تتبع مواعيد الواجبات، الامتحانات، والمشاريع لحظة بلحظة مع فرز ذكي حسب المادة والوقت
+              </p>
+            </div>
+          </div>
+
+          {/* Quick Metrics Badges & Add Exam Button */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => onNavigateTab(Tab.ASSIGNMENTS)}
+              className="text-xs font-bold text-primary hover:underline flex items-center gap-1 bg-primary/10 px-3 py-1.5 rounded-xl transition"
+            >
+              <CheckSquare size={14} />
+              <span>صفحة المهام الموحدة ➔</span>
+            </button>
+
+            {isManager && (
+              <button
+                type="button"
+                onClick={() => setIsAddExamModalOpen(true)}
+                className="px-3.5 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-purple-600/20 active:scale-95"
+              >
+                <Plus size={15} />
+                <span>إضافة موعد امتحان 🎓</span>
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Action Controls */}
-        <div className="flex items-center gap-2 flex-wrap self-end sm:self-auto">
-          {/* Filter Pills */}
-          <div className="flex items-center p-1 bg-gray-100 dark:bg-slate-700/60 rounded-2xl text-[11px] font-bold">
-            <button
-              onClick={() => setFilterType('ALL')}
-              className={`px-3 py-1.5 rounded-xl transition ${
-                filterType === 'ALL'
-                  ? 'bg-white dark:bg-slate-800 text-orange-600 dark:text-orange-400 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-300'
-              }`}
-            >
-              الكل ({allDeadlines.length})
-            </button>
-            <button
-              onClick={() => setFilterType('EXAM')}
-              className={`px-3 py-1.5 rounded-xl transition flex items-center gap-1 ${
-                filterType === 'EXAM'
-                  ? 'bg-white dark:bg-slate-800 text-purple-600 dark:text-purple-400 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-300'
-              }`}
-            >
-              <Award size={12} />
-              <span>الامتحانات</span>
-            </button>
-            <button
-              onClick={() => setFilterType('ASSIGNMENT')}
-              className={`px-3 py-1.5 rounded-xl transition flex items-center gap-1 ${
-                filterType === 'ASSIGNMENT'
-                  ? 'bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-300'
-              }`}
-            >
+        {/* Dynamic Quick Stat Badges */}
+        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-gray-100 dark:border-slate-700/60 text-[11px] font-bold">
+          <span className="text-gray-400">ملخص المواعيد:</span>
+          {urgentCount > 0 ? (
+            <span className="bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-300 px-2.5 py-1 rounded-xl flex items-center gap-1 border border-red-200 dark:border-red-900/50">
+              <Flame size={12} className="animate-bounce" />
+              <span>{urgentCount} حرج خلال 48 ساعة!</span>
+            </span>
+          ) : null}
+
+          {thisWeekCount > 0 ? (
+            <span className="bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 px-2.5 py-1 rounded-xl flex items-center gap-1 border border-amber-200 dark:border-amber-900/50">
+              <Clock size={12} />
+              <span>{thisWeekCount} مواعيد هذا الأسبوع</span>
+            </span>
+          ) : null}
+
+          {pendingAssignmentsCount > 0 ? (
+            <span className="bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 px-2.5 py-1 rounded-xl flex items-center gap-1 border border-blue-200 dark:border-blue-900/50">
               <BookOpen size={12} />
-              <span>الواجبات</span>
-            </button>
-            <button
-              onClick={() => setFilterType('PROJECT')}
-              className={`px-3 py-1.5 rounded-xl transition flex items-center gap-1 ${
-                filterType === 'PROJECT'
-                  ? 'bg-white dark:bg-slate-800 text-emerald-600 dark:text-emerald-400 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-300'
-              }`}
-            >
-              <Layers size={12} />
-              <span>المشاريع</span>
-            </button>
+              <span>{pendingAssignmentsCount} واجبات متبقية عليك</span>
+            </span>
+          ) : (
+            <span className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 px-2.5 py-1 rounded-xl flex items-center gap-1 border border-emerald-200 dark:border-emerald-900/50">
+              <CheckCircle2 size={12} />
+              <span>أتممت جميع الواجبات المسجلة ✅</span>
+            </span>
+          )}
+        </div>
+
+        {/* Comprehensive Filter Controls */}
+        <div className="bg-gray-50/90 dark:bg-slate-900/60 p-3 rounded-2xl border border-gray-100 dark:border-slate-700 space-y-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+            {/* 1. Filter by Type */}
+            <div className="flex items-center gap-1 overflow-x-auto pb-1 lg:pb-0">
+              <span className="text-[10px] font-black text-gray-400 pl-1 shrink-0">النوع:</span>
+              <button
+                type="button"
+                onClick={() => setFilterType('ALL')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 ${
+                  filterType === 'ALL'
+                    ? 'bg-primary text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100'
+                }`}
+              >
+                الكل ({allDeadlines.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterType('EXAM')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 shrink-0 ${
+                  filterType === 'EXAM'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100'
+                }`}
+              >
+                <Award size={13} />
+                <span>الامتحانات ({exams.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterType('ASSIGNMENT')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 shrink-0 ${
+                  filterType === 'ASSIGNMENT'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100'
+                }`}
+              >
+                <BookOpen size={13} />
+                <span>الواجبات ({assignments.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterType('PROJECT')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 shrink-0 ${
+                  filterType === 'PROJECT'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100'
+                }`}
+              >
+                <Layers size={13} />
+                <span>المشاريع ({projects.length})</span>
+              </button>
+            </div>
+
+            {/* 2. Course Filter Dropdown & Reset */}
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5">
+                <BookOpen size={14} className="text-gray-400 shrink-0" />
+                <select
+                  value={filterCourseId}
+                  onChange={(e) => setFilterCourseId(e.target.value)}
+                  className="bg-transparent text-xs font-bold text-gray-800 dark:text-white outline-none cursor-pointer max-w-[150px] sm:max-w-[200px]"
+                >
+                  <option value="ALL">كافة المواد الدراسية</option>
+                  {courses.map((c) => (
+                    <option key={c.id} value={c.id} className="bg-white dark:bg-slate-800">
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {isAnyFilterActive && (
+                <button
+                  type="button"
+                  onClick={handleResetFilters}
+                  className="text-[11px] font-bold text-red-500 hover:underline px-2 py-1 rounded-lg transition shrink-0"
+                >
+                  إعادة ضبط الفلاتر ✕
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Add Exam Button (For Representatives & Sub-Reps) */}
-          {isManager && (
-            <button
-              onClick={() => setIsAddExamModalOpen(true)}
-              className="px-3.5 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-purple-600/20 active:scale-95"
-            >
-              <Plus size={15} />
-              <span>إضافة موعد امتحان 🎓</span>
-            </button>
+          {/* Quick Course Chips (1-tap filtering) */}
+          {courses.length > 0 && (
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
+              <span className="text-[10px] font-black text-gray-400 shrink-0">المادة السريعة:</span>
+              <button
+                type="button"
+                onClick={() => setFilterCourseId('ALL')}
+                className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition shrink-0 ${
+                  filterCourseId === 'ALL'
+                    ? 'bg-gray-800 text-white dark:bg-slate-200 dark:text-slate-900 shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-slate-700 hover:bg-gray-100'
+                }`}
+              >
+                الكل
+              </button>
+              {courses.map((course) => {
+                const countForCourse = allDeadlines.filter((d) => d.courseId === course.id).length;
+                return (
+                  <button
+                    key={course.id}
+                    type="button"
+                    onClick={() => setFilterCourseId(course.id)}
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition flex items-center gap-1 shrink-0 ${
+                      filterCourseId === course.id
+                        ? 'bg-primary text-white shadow-xs'
+                        : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-slate-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    <span>{course.name}</span>
+                    {countForCourse > 0 && (
+                      <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-black/10 dark:bg-white/10 font-mono">
+                        {countForCourse}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           )}
+
+          {/* Timeframe & Hide Completed Toggles */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100 dark:border-slate-700/50">
+            {/* Timeframe Tabs */}
+            <div className="flex items-center gap-1 overflow-x-auto text-[11px] font-bold">
+              <span className="text-gray-400 pl-1 shrink-0">الفترة:</span>
+              <button
+                type="button"
+                onClick={() => setFilterTimeframe('ALL')}
+                className={`px-2.5 py-1 rounded-lg transition ${
+                  filterTimeframe === 'ALL'
+                    ? 'bg-orange-500 text-white'
+                    : 'text-gray-500 hover:text-gray-800 dark:text-gray-400'
+                }`}
+              >
+                كافة الأيام
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterTimeframe('URGENT_48H')}
+                className={`px-2.5 py-1 rounded-lg transition flex items-center gap-1 ${
+                  filterTimeframe === 'URGENT_48H'
+                    ? 'bg-red-500 text-white'
+                    : 'text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30'
+                }`}
+              >
+                <Flame size={12} />
+                <span>حرج (أقل من 48 ساعة)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterTimeframe('THIS_WEEK')}
+                className={`px-2.5 py-1 rounded-lg transition ${
+                  filterTimeframe === 'THIS_WEEK'
+                    ? 'bg-amber-500 text-white'
+                    : 'text-gray-500 hover:text-gray-800 dark:text-gray-400'
+                }`}
+              >
+                خلال 7 أيام
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterTimeframe('LATER')}
+                className={`px-2.5 py-1 rounded-lg transition ${
+                  filterTimeframe === 'LATER'
+                    ? 'bg-blue-500 text-white'
+                    : 'text-gray-500 hover:text-gray-800 dark:text-gray-400'
+                }`}
+              >
+                القادمة لاحقاً
+              </button>
+            </div>
+
+            {/* Hide Completed Toggle */}
+            <button
+              type="button"
+              onClick={() => setHideCompleted(!hideCompleted)}
+              className={`px-3 py-1 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                hideCompleted
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-white dark:bg-slate-800 text-gray-500 dark:text-gray-300 border border-gray-200 dark:border-slate-700'
+              }`}
+            >
+              {hideCompleted ? <EyeOff size={13} /> : <Eye size={13} />}
+              <span>إخفاء ما أنجزته</span>
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Deadlines Horizontal Cards Strip */}
       {filtered.length === 0 ? (
-        <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl text-center border border-dashed border-gray-200 dark:border-slate-700">
-          <Clock size={36} className="mx-auto text-gray-300 dark:text-slate-600 mb-2" />
-          <p className="font-bold text-gray-600 dark:text-gray-300 text-sm">
-            لا توجد مواعيد تسليم أو امتحانات قريبة حالياً 🎉
+        <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl text-center border border-dashed border-gray-200 dark:border-slate-700 space-y-2">
+          <Clock size={36} className="mx-auto text-gray-300 dark:text-slate-600 mb-1" />
+          <p className="font-bold text-gray-700 dark:text-gray-300 text-sm">
+            لا توجد مواعيد تطابق الفلاتر المحددة حالياً 🎉
           </p>
-          <p className="text-xs text-gray-400 mt-1">
-            عند قيام الممثل بإضافة واجب، موعد امتحان، أو موعد مشروع، سيبدأ العداد التنازلي التلقائي هنا فوراً!
+          <p className="text-xs text-gray-400 max-w-md mx-auto">
+            {isAnyFilterActive
+              ? 'جرّب تغيير فلاتر المادة أو الفترة الزمنية لعرض باقي المواعيد والامتحانات.'
+              : 'عند قيام الممثل بإضافة موعد امتحان أو واجب، سيبدأ العداد التنازلي التلقائي هنا فوراً!'}
           </p>
+          {isAnyFilterActive && (
+            <button
+              type="button"
+              onClick={handleResetFilters}
+              className="mt-2 px-4 py-2 bg-primary/10 hover:bg-primary/20 text-primary rounded-xl text-xs font-bold transition inline-flex items-center gap-1"
+            >
+              <span>عرض كافة المواعيد</span>
+              <ArrowRight size={14} className="rtl:rotate-180" />
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
           {filtered.map((item) => {
             const countdown = getRemainingTime(item.timestamp);
             const isVeryUrgent = !countdown.isOverdue && countdown.days === 0 && countdown.hours < 24;
-            const isUpcomingSoon = !countdown.isOverdue && countdown.days < 3;
 
             // Type styling
             const typeConfig = {
               EXAM: {
-                label: item.examType === 'FINAL' ? 'امتحان نهائي 🏆' : item.examType === 'MIDTERM' ? 'امتحان نصفي 📜' : item.examType === 'PRACTICAL' ? 'امتحان عملي 🧪' : 'كويز سريع 📝',
+                label:
+                  item.examType === 'FINAL'
+                    ? 'امتحان نهائي 🏆'
+                    : item.examType === 'MIDTERM'
+                    ? 'امتحان نصفي 📜'
+                    : item.examType === 'PRACTICAL'
+                    ? 'امتحان عملي 🧪'
+                    : 'كويز سريع 📝',
                 border: isVeryUrgent ? 'border-red-400' : 'border-purple-200 dark:border-purple-900/40',
                 badgeBg: 'bg-purple-100 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300',
                 glow: 'hover:shadow-purple-500/10',
@@ -349,7 +626,7 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
               >
                 {/* Status indicator bar on top */}
                 {isVeryUrgent && (
-                  <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-red-500 via-rose-500 to-orange-500 animate-pulse"></div>
+                  <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-red-500 via-rose-500 to-orange-500 animate-pulse" />
                 )}
 
                 <div>
@@ -420,11 +697,13 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
                         </div>
 
                         {/* Hours */}
-                        <div className={`p-2 rounded-2xl border ${
-                          isVeryUrgent 
-                            ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-300' 
-                            : 'bg-gray-50 dark:bg-slate-700/60 border-gray-100 dark:border-slate-600 text-gray-800 dark:text-white'
-                        }`}>
+                        <div
+                          className={`p-2 rounded-2xl border ${
+                            isVeryUrgent
+                              ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-300'
+                              : 'bg-gray-50 dark:bg-slate-700/60 border-gray-100 dark:border-slate-600 text-gray-800 dark:text-white'
+                          }`}
+                        >
                           <div className="text-base sm:text-lg font-black font-mono tracking-tight">
                             {String(countdown.hours).padStart(2, '0')}
                           </div>
@@ -432,11 +711,13 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
                         </div>
 
                         {/* Minutes */}
-                        <div className={`p-2 rounded-2xl border ${
-                          isVeryUrgent 
-                            ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-300' 
-                            : 'bg-gray-50 dark:bg-slate-700/60 border-gray-100 dark:border-slate-600 text-gray-800 dark:text-white'
-                        }`}>
+                        <div
+                          className={`p-2 rounded-2xl border ${
+                            isVeryUrgent
+                              ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-300'
+                              : 'bg-gray-50 dark:bg-slate-700/60 border-gray-100 dark:border-slate-600 text-gray-800 dark:text-white'
+                          }`}
+                        >
                           <div className="text-base sm:text-lg font-black font-mono tracking-tight">
                             {String(countdown.minutes).padStart(2, '0')}
                           </div>
@@ -466,8 +747,8 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
                               onToggleCompleteAssignment((item.originalItem as Assignment).id);
                             }}
                             className={`px-2 py-0.5 rounded-lg font-bold text-[10px] transition ${
-                              item.isCompleted 
-                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300' 
+                              item.isCompleted
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
                                 : 'bg-gray-100 hover:bg-gray-200 dark:bg-slate-700 text-gray-600 dark:text-gray-300'
                             }`}
                           >
@@ -498,11 +779,15 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
                     إضافة موعد امتحان جديد 🎓
                   </h3>
                   <p className="text-xs text-gray-400">
-                    سيظهر فوراً في شريط العد التنازلي لجميع طلاب الدفعة
+                    سيظهر فوراً في شريط العد التنازلي وفي خانة المهام لجميع طلاب الدفعة
                   </p>
                 </div>
               </div>
-              <button onClick={() => setIsAddExamModalOpen(false)} className="text-gray-400 hover:text-gray-600">
+              <button
+                type="button"
+                onClick={() => setIsAddExamModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
                 <X size={18} />
               </button>
             </div>
@@ -647,7 +932,11 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
                   </p>
                 </div>
               </div>
-              <button onClick={() => setSelectedExamDetails(null)} className="text-gray-400 hover:text-gray-600">
+              <button
+                type="button"
+                onClick={() => setSelectedExamDetails(null)}
+                className="text-gray-400 hover:text-gray-600"
+              >
                 <X size={18} />
               </button>
             </div>
@@ -725,3 +1014,5 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
     </div>
   );
 };
+
+export default LiveCountdownStrip;

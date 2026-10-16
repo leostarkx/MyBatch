@@ -6,6 +6,73 @@ export enum UserRole {
   ASSISTANT_REP = 'ASSISTANT_REP'
 }
 
+// الرتب والمهام المخصصة لمساعدي الممثل في الدفعة
+export enum AssistantDuty {
+  ATTENDANCE = 'ATTENDANCE', // مسؤول الحضور والغياب 📋
+  GRADES = 'GRADES', // مسؤول الدرجات والسعي 📊
+  MATERIALS = 'MATERIALS', // مسؤول الملازم والمحاضرات 📚
+  ANNOUNCEMENTS = 'ANNOUNCEMENTS', // مسؤول التبليغات الرسمية 📢
+  ASSIGNMENTS = 'ASSIGNMENTS', // مسؤول الواجبات والمشاريع 📝
+}
+
+export interface AssistantDutyConfig {
+  id: AssistantDuty;
+  label: string;
+  badge: string;
+  icon: string;
+  description: string;
+  color: string;
+  bgLight: string;
+}
+
+export const ASSISTANT_DUTIES_CONFIG: Record<AssistantDuty, AssistantDutyConfig> = {
+  [AssistantDuty.ATTENDANCE]: {
+    id: AssistantDuty.ATTENDANCE,
+    label: 'مسؤول الحضور والغياب',
+    badge: '📋 مسؤول الحضور',
+    icon: 'CheckSquare',
+    description: 'تسجيل الحضور والغياب والإجازات، وإدارة استثناءات وتبديل الكروبات وكشوفات المحاضرات.',
+    color: 'text-emerald-700 dark:text-emerald-300',
+    bgLight: 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-800/60',
+  },
+  [AssistantDuty.GRADES]: {
+    id: AssistantDuty.GRADES,
+    label: 'مسؤول الدرجات والسعي',
+    badge: '📊 مسؤول الدرجات',
+    icon: 'Award',
+    description: 'رصد وتعديل درجات الطلاب والكويزات والامتحانات في كشوفات السعي التراكمي من 50.',
+    color: 'text-blue-700 dark:text-blue-300',
+    bgLight: 'bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-800/60',
+  },
+  [AssistantDuty.MATERIALS]: {
+    id: AssistantDuty.MATERIALS,
+    label: 'مسؤول الملازم والمحاضرات',
+    badge: '📚 مسؤول الملازم',
+    icon: 'BookOpen',
+    description: 'إضافة وتصنيف أقسام الملازم وبنوك الأسئلة، ورفع ملفات المحاضرات وروابط الدراسات.',
+    color: 'text-indigo-700 dark:text-indigo-300',
+    bgLight: 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-200 dark:border-indigo-800/60',
+  },
+  [AssistantDuty.ANNOUNCEMENTS]: {
+    id: AssistantDuty.ANNOUNCEMENTS,
+    label: 'مسؤول التبليغات الرسمية',
+    badge: '📢 مسؤول التبليغات',
+    icon: 'Bell',
+    description: 'نشر التبليغات والإعلانات الهامة للدفعة وتثبيتها وإنشاء استطلاعات الرأي.',
+    color: 'text-purple-700 dark:text-purple-300',
+    bgLight: 'bg-purple-50 dark:bg-purple-950/50 border-purple-200 dark:border-purple-800/60',
+  },
+  [AssistantDuty.ASSIGNMENTS]: {
+    id: AssistantDuty.ASSIGNMENTS,
+    label: 'مسؤول الواجبات والمشاريع',
+    badge: '📝 مسؤول التكليفات',
+    icon: 'Layers',
+    description: 'إضافة الواجبات ومتابعة مواعيد التسليم، وإنشاء مشاريع المواد وكروبات الطلاب.',
+    color: 'text-amber-700 dark:text-amber-300',
+    bgLight: 'bg-amber-50 dark:bg-amber-950/50 border-amber-200 dark:border-amber-800/60',
+  },
+};
+
 // App Theme Colors
 export type ThemeColor = 'blue' | 'emerald' | 'violet' | 'rose' | 'amber';
 
@@ -84,6 +151,7 @@ export interface User {
   studiedMaterialIds?: string[];
   bookmarkedMaterialIds?: string[];
   notificationPrefs?: NotificationPreferences;
+  assistantDuties?: AssistantDuty[]; // الرتب والمهام الإدارية الموكلة للطالب
 }
 
 // Batch Instance Schema (النسخ والدفعات)
@@ -294,7 +362,7 @@ export enum Tab {
   REQUESTS = 'طلبات الانضمام',
   COURSES = 'المواد الدراسية',
   PROJECTS = 'المشاريع',
-  ASSIGNMENTS = 'الواجبات',
+  ASSIGNMENTS = 'المهام',
   LEADERBOARD = 'المتصدرين',
   SUGGESTIONS = 'صندوق الدفعة'
 }

@@ -1,1 +1,24 @@
 /* Global Styles */
+
+.wysiwyg-editor:empty:before {
+  content: attr(data-placeholder);
+  color: #94a3b8;
+  pointer-events: none;
+  display: block;
+}
+
+.telegram-spoiler {
+  background-color: #334155;
+  color: #ffffff;
+  padding: 2px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s ease;
+}
+
+.telegram-spoiler.revealed {
+  background-color: rgba(37, 99, 235, 0.15);
+  color: inherit;
+  border: 1px dashed rgba(37, 99, 235, 0.4);
+}

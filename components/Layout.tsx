@@ -43,7 +43,7 @@ const Layout: React.FC<LayoutProps> = ({
   let navItems = [
     { id: Tab.HOME, icon: Home, label: 'الرئيسية' },
     { id: Tab.LEADERBOARD, icon: Trophy, label: 'المتصدرين 🏆' },
-    { id: Tab.ASSIGNMENTS, icon: CheckSquare, label: 'الواجبات' },
+    { id: Tab.ASSIGNMENTS, icon: CheckSquare, label: 'المهام 📝' },
     { id: Tab.SCHEDULE, icon: CalendarCheck, label: 'الجدول' },
     { id: Tab.GRADES, icon: GraduationCap, label: 'الدرجات' },
     { id: Tab.ATTENDANCE, icon: CalendarCheck, label: 'الحضور' },
@@ -63,11 +63,12 @@ const Layout: React.FC<LayoutProps> = ({
     ];
   } else {
     // Representative & Owner tabs
+    const hasMaterialsDuty = user.assistantDuties?.includes('MATERIALS' as any);
     if (user.role === UserRole.REPRESENTATIVE || user.role === UserRole.OWNER) {
       navItems.splice(6, 0, { id: Tab.STUDENTS, icon: Users, label: 'إدارة الطلاب' });
       navItems.splice(7, 0, { id: Tab.COURSES, icon: BookOpen, label: 'المواد' });
       navItems.splice(8, 0, { id: Tab.REQUESTS, icon: UserPlus, label: 'الطلبات' });
-    } else if (user.role === UserRole.ASSISTANT_REP) {
+    } else if (user.role === UserRole.ASSISTANT_REP || hasMaterialsDuty) {
       navItems.splice(7, 0, { id: Tab.COURSES, icon: BookOpen, label: 'المواد' });
     }
     if (user.role === UserRole.OWNER) {

@@ -41,6 +41,8 @@ import {
   deleteStudentSummaryFromFirestore,
 } from "../services/firebase";
 import { broadcastBatchNotification } from "../services/notificationService";
+import { RichTextEditor } from "./RichTextEditor";
+import { FormattedTextRenderer } from "./FormattedTextRenderer";
 
 interface StudentSummariesHubProps {
   currentUser: User | null;
@@ -732,8 +734,8 @@ export const StudentSummariesHub: React.FC<StudentSummariesHubProps> = ({
 
                   {/* Written Message / Note Content (if provided) */}
                   {summary.content && (
-                    <div className="p-3.5 rounded-2xl bg-gray-50/90 dark:bg-slate-700/40 border border-gray-100 dark:border-slate-700 text-xs text-gray-700 dark:text-gray-200 whitespace-pre-wrap leading-relaxed mb-3 max-h-56 overflow-y-auto">
-                      {summary.content}
+                    <div className="p-3.5 rounded-2xl bg-gray-50/90 dark:bg-slate-700/40 border border-gray-100 dark:border-slate-700 text-xs text-gray-700 dark:text-gray-200 leading-relaxed mb-3 max-h-72 overflow-y-auto">
+                      <FormattedTextRenderer content={summary.content} />
                     </div>
                   )}
 
@@ -943,21 +945,14 @@ export const StudentSummariesHub: React.FC<StudentSummariesHubProps> = ({
                 />
               </div>
 
-              {/* 4. Text Note / Message Content (Optional if file attached, or both) */}
-              <div>
-                <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 flex items-center justify-between">
-                  <span>نص الملاحظة أو الشرح المكتوب (اختياري مع الملفات)</span>
-                  <span className="text-[10px] text-gray-400 font-normal">
-                    يدعم الفقرات والنقاط
-                  </span>
-                </label>
-                <textarea
-                  value={newContent}
-                  onChange={(e) => setNewContent(e.target.value)}
-                  placeholder="اكتب ملاحظاتك، النقاط المهمة التي ركز عليها الدكتور، أو شرح الملخص هنا..."
-                  className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-xs outline-none focus:ring-2 focus:ring-primary/20 min-h-[120px] resize-y leading-relaxed"
-                />
-              </div>
+              {/* 4. Rich Text Note / Lecture Summary */}
+              <RichTextEditor
+                value={newContent}
+                onChange={setNewContent}
+                placeholder="اكتب تفاصيل الملخص، القوانين، الملاحظات الهامة، أو أسئلة الامتحانات هنا بتنسيق وألوان مرتبة مثل التلي ✍️"
+                label="نص الملخص أو الملاحظات المكتوبة (يوفر مساحة ولا يشترط رفع ملف!)"
+                minHeight="min-h-[160px]"
+              />
 
               {/* 5. Any-Format File Attachments */}
               <div>

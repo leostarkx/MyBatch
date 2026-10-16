@@ -124,6 +124,7 @@ export const StudentAttendanceReportModal: React.FC<
       );
       if (hasStudentRecord) return true;
       if (s.targetGroup && s.targetGroup !== "ALL") {
+        if (!targetStudent.academicGroup) return true;
         return targetStudent.academicGroup === s.targetGroup;
       }
       return true;
@@ -280,9 +281,11 @@ export const StudentAttendanceReportModal: React.FC<
             </div>
             <button
               onClick={onClose}
-              className="lg:hidden p-2 text-gray-400 hover:text-gray-600 rounded-xl"
+              className="px-3.5 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-gray-700 dark:text-gray-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0"
+              title="إغلاق التقرير والرجوع"
             >
-              <X size={20} />
+              <X size={16} />
+              <span>إغلاق / رجوع</span>
             </button>
           </div>
 
@@ -378,13 +381,6 @@ export const StudentAttendanceReportModal: React.FC<
                   <span>تنزيل التقرير بصيغة PDF</span>
                 </>
               )}
-            </button>
-
-            <button
-              onClick={onClose}
-              className="hidden lg:flex p-2 text-gray-400 hover:text-gray-600 rounded-xl"
-            >
-              <X size={20} />
             </button>
           </div>
         </div>

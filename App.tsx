@@ -8,6 +8,8 @@ import { BatchSuggestionsBox } from "./components/BatchSuggestionsBox";
 import { FinalExamGradeCalculator } from "./components/FinalExamGradeCalculator";
 import { NotificationPreferencesCard } from "./components/NotificationPreferencesCard";
 import { NotificationCenterModal } from "./components/NotificationCenterModal";
+import { RichTextEditor } from "./components/RichTextEditor";
+import { FormattedTextRenderer } from "./components/FormattedTextRenderer";
 import {
   getUserNotificationPreferences,
   isCategoryEnabledForUser,
@@ -47,6 +49,8 @@ import {
   Exam,
   StudentSummary,
   BatchSuggestion,
+  AssistantDuty,
+  ASSISTANT_DUTIES_CONFIG,
 } from "./types";
 import {
   Send,
@@ -126,6 +130,10 @@ import {
   Vote,
   CreditCard,
   Trophy,
+  ZoomIn,
+  ZoomOut,
+  RotateCw,
+  Maximize2,
 } from "lucide-react";
 
 // --- Storage & Direct File Utilities ---
@@ -618,7 +626,28 @@ export default function App() {
   const isAssistantRep = currentUser?.role === UserRole.ASSISTANT_REP;
   const isMainAdmin = isOwner || isRepresentative;
   const isManager = isMainAdmin || isAssistantRep;
+
+  // Granular Role & Duty Checks (الممثل الرئيسي + المساعدين المخصصين)
+  const userDuties = currentUser?.assistantDuties || [];
+  const canManageAttendance =
+    isManager || userDuties.includes(AssistantDuty.ATTENDANCE);
+  const canManageGrades =
+    isManager || userDuties.includes(AssistantDuty.GRADES);
+  const canManageMaterials =
+    isManager || userDuties.includes(AssistantDuty.MATERIALS);
+  const canManageAnnouncements =
+    isManager || userDuties.includes(AssistantDuty.ANNOUNCEMENTS);
+  const canManageAssignments =
+    isManager || userDuties.includes(AssistantDuty.ASSIGNMENTS);
+  const isAnyAssistant = isAssistantRep || userDuties.length > 0;
+
+  // Duty Management Modal State (Representative assigns/revokes duties for students)
+  const [dutyTargetStudent, setDutyTargetStudent] = useState<User | null>(null);
+  const [isUpdatingDuty, setIsUpdatingDuty] = useState(false);
   const [viewingUserProfile, setViewingUserProfile] = useState<User | null>(
+    null,
+  );
+  const [previousTabBeforeProfile, setPreviousTabBeforeProfile] = useState<Tab | null>(
     null,
   );
   const [activeTab, setActiveTab] = useState<Tab>(Tab.HOME);
@@ -831,6 +860,17 @@ export default function App() {
   }, [previewItem]);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [previewRotation, setPreviewRotation] = useState(0);
+
+  useEffect(() => {
+    if (!previewItem) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setPreviewItem(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [previewItem]);
 
   // Grade Editing State (Admin)
   const [isEditingGrades, setIsEditingGrades] = useState(false);
@@ -1237,8 +1277,21 @@ export default function App() {
   const handleViewProfile = (uid: string) => {
     const userToView = appUsers.find((u) => u.uid === uid);
     if (userToView) {
+      if (activeTab !== Tab.PROFILE) {
+        setPreviousTabBeforeProfile(activeTab);
+      }
       setViewingUserProfile(userToView);
       setActiveTab(Tab.PROFILE);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  const handleBackFromProfile = () => {
+    setViewingUserProfile(null);
+    if (previousTabBeforeProfile && previousTabBeforeProfile !== Tab.PROFILE) {
+      setActiveTab(previousTabBeforeProfile);
+    } else {
+      setActiveTab(Tab.HOME);
     }
   };
 
@@ -2052,6 +2105,49 @@ export default function App() {
     } catch (err: any) {
       console.error("Error toggling assistant rep:", err);
       alert("حدث خطأ أثناء تحديث رتبة الطالب.");
+    }
+  };
+
+  const handleToggleUserDuty = async (targetUser: User, duty: AssistantDuty) => {
+    if (!isMainAdmin) return;
+    setIsUpdatingDuty(true);
+    try {
+      const currentDuties = targetUser.assistantDuties || [];
+      const hasDuty = currentDuties.includes(duty);
+      const nextDuties = hasDuty
+        ? currentDuties.filter((d) => d !== duty)
+        : [...currentDuties, duty];
+
+      const updatedUser: User = {
+        ...targetUser,
+        assistantDuties: nextDuties,
+      };
+
+      await saveUserToFirestore(updatedUser);
+
+      // Update local duty target state if modal is open
+      if (dutyTargetStudent && dutyTargetStudent.uid === targetUser.uid) {
+        setDutyTargetStudent(updatedUser);
+      }
+
+      const dutyConfig = ASSISTANT_DUTIES_CONFIG[duty];
+      await notifyUserIfAllowed({
+        targetUser,
+        category: "SYSTEM",
+        title: hasDuty
+          ? `ℹ️ تحديث مهامك في الدفعة: تم سحب رتبة (${dutyConfig.label})`
+          : `🎖️ تهانينا: تم تعيينك (${dutyConfig.label})!`,
+        content: hasDuty
+          ? `تم تحديث صلاحياتك وسحب مهمة (${dutyConfig.label}) من حسابك.`
+          : `قام ممثل الدفعة بتعيينك رسمياً كـ (${dutyConfig.label}). أصبحت تملك الآن صلاحيات: ${dutyConfig.description}`,
+        batchCode: effectiveBatchCode,
+        targetTab: Tab.PROFILE,
+      });
+    } catch (err) {
+      console.error("Error updating user duties:", err);
+      alert("حدث خطأ أثناء حفظ رتب الطالب.");
+    } finally {
+      setIsUpdatingDuty(false);
     }
   };
 
@@ -4399,7 +4495,7 @@ export default function App() {
             <Bell className="text-primary" size={24} />
             الإعلانات والتنبيهات
           </h2>
-          {isManager && (
+          {canManageAnnouncements && (
             <button
               onClick={() => setIsAddingAnnouncement(true)}
               className="bg-primary text-white px-4 py-2 rounded-xl text-sm font-bold shadow-lg shadow-primary/30 hover:bg-primary/90 transition flex items-center gap-2"
@@ -4467,13 +4563,13 @@ export default function App() {
                         {new Date(ann.timestamp).toLocaleDateString("ar-EG")}
                       </span>
                     </div>
-                    {isManager && (
+                    {canManageAnnouncements && (
                       <div className="flex items-center gap-1.5">
                         <button
                           onClick={() => handleTogglePinAnnouncement(ann)}
                           className={`p-1.5 rounded-xl transition flex items-center gap-1 text-[11px] font-bold ${
                             ann.isPinned
-                              ? "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300"
+                              ? "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"
                               : "text-gray-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-slate-700"
                           }`}
                           title={ann.isPinned ? "إلغاء تثبيت التبليغ" : "تثبيت التبليغ في الأعلى"}
@@ -4494,9 +4590,9 @@ export default function App() {
                   <h3 className="font-bold text-gray-800 dark:text-white text-lg mb-2">
                     {ann.title}
                   </h3>
-                  <p className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed whitespace-pre-line mb-4">
-                    {ann.content}
-                  </p>
+                  <div className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed mb-4">
+                    <FormattedTextRenderer content={ann.content} />
+                  </div>
 
                   {/* Interactive Poll Section */}
                   {ann.poll && (
@@ -4632,14 +4728,53 @@ export default function App() {
 
                   {ann.mediaUrl && (
                     <div className="mb-4 rounded-2xl overflow-hidden border border-gray-100 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
-                      {ann.mediaType === 'image' && (
-                        <img src={ann.mediaUrl} alt={ann.title} className="w-full h-auto max-h-80 object-cover" />
-                      )}
-                      {ann.mediaType === 'video' && (
-                        <video src={ann.mediaUrl} controls className="w-full h-auto max-h-80" />
-                      )}
-                      {ann.mediaType === 'link' && (
-                        <a href={ann.mediaUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-4 text-primary hover:underline font-bold text-sm">
+                      {(ann.mediaType === "image" ||
+                        ann.mediaUrl.match(/\.(jpeg|jpg|gif|png|webp|svg)($|\?)/i) ||
+                        ann.mediaUrl.startsWith("data:image/") ||
+                        ann.mediaUrl.includes("cloudinary.com") ||
+                        ann.mediaUrl.startsWith("blob:")) ? (
+                        <div
+                          onClick={() => {
+                            setPreviewZoom(1);
+                            setPreviewRotation(0);
+                            setPreviewItem({
+                              title: ann.title || "صورة التبليغ",
+                              url: ann.mediaUrl!,
+                              type: "IMAGE",
+                            });
+                          }}
+                          className="relative group cursor-pointer overflow-hidden block"
+                          title="اضغط لمعاينة وتكبير الصورة"
+                        >
+                          <img
+                            src={ann.mediaUrl}
+                            alt={ann.title}
+                            className="w-full h-auto max-h-96 object-cover group-hover:scale-[1.015] transition-transform duration-300"
+                          />
+                          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                            <span className="bg-black/75 backdrop-blur-md text-white text-xs font-bold px-4 py-2 rounded-2xl flex items-center gap-2 shadow-xl border border-white/20">
+                              <Eye size={16} />
+                              <span>تكبير ومعاينة الصورة 🔍</span>
+                            </span>
+                          </div>
+                          <div className="absolute top-3 left-3 bg-black/60 backdrop-blur-md text-white text-[11px] font-bold px-2.5 py-1 rounded-xl flex items-center gap-1.5 opacity-85 group-hover:opacity-100 shadow-sm border border-white/10">
+                            <Maximize2 size={13} />
+                            <span>تكبير الصورة</span>
+                          </div>
+                        </div>
+                      ) : ann.mediaType === "video" ? (
+                        <video
+                          src={ann.mediaUrl}
+                          controls
+                          className="w-full h-auto max-h-80"
+                        />
+                      ) : (
+                        <a
+                          href={ann.mediaUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-3 p-4 text-primary hover:underline font-bold text-sm"
+                        >
                           <ExternalLink size={18} />
                           {ann.mediaUrl}
                         </a>
@@ -4695,12 +4830,14 @@ export default function App() {
                     {courses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
-                <textarea
-                  placeholder="محتوى الإعلان..."
-                  className="w-full bg-gray-50 dark:bg-slate-700 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-3 text-sm outline-none h-28 resize-none"
+                <RichTextEditor
                   value={newAnnouncementContent}
-                  onChange={(e) => setNewAnnouncementContent(e.target.value)}
-                ></textarea>
+                  onChange={setNewAnnouncementContent}
+                  placeholder="اكتب محتوى الإعلان هنا... يمكنك تحديد الكلمات وتنسيقها مثل التليغرام (عريض، مائل، تسطير، ألوان، سبويلر) ✍️"
+                  label="محتوى التبليغ بالتنسيق الغني"
+                  required
+                  minHeight="min-h-[160px]"
+                />
 
                 {/* Pin & Poll Toggles */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -4854,6 +4991,30 @@ export default function App() {
                       </button>
                     </div>
                   )}
+
+                  {newAnnouncementMediaUrl && (newAnnouncementMediaType === "image" || newAnnouncementMediaUrl.startsWith("data:image/") || newAnnouncementMediaUrl.match(/\.(jpeg|jpg|gif|png|webp|svg)($|\?)/i)) && (
+                    <div className="relative group rounded-xl overflow-hidden border border-gray-200 dark:border-slate-700 bg-black/5 dark:bg-black/30 p-1 flex items-center justify-center">
+                      <img
+                        src={newAnnouncementMediaUrl}
+                        alt="معاينة الصورة"
+                        className="max-h-32 w-auto object-contain rounded-lg cursor-pointer hover:opacity-90 transition"
+                        title="انقر لمعاينة الصورة بالحجم الكامل"
+                        onClick={() => {
+                          setPreviewZoom(1);
+                          setPreviewRotation(0);
+                          setPreviewItem({
+                            title: newAnnouncementTitle || "معاينة مرفق الإعلان",
+                            url: newAnnouncementMediaUrl,
+                            type: "IMAGE",
+                          });
+                        }}
+                      />
+                      <div className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-sm text-white text-[10px] px-2 py-0.5 rounded-md pointer-events-none flex items-center gap-1 font-bold">
+                        <Eye size={11} />
+                        <span>معاينة وتكبير</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex gap-4">
@@ -4926,8 +5087,8 @@ export default function App() {
       { label: "حضور ومشاركة (5)", name: "الحضور والمشاركة", score: 5 },
     ];
 
-    // MANAGER VIEW (Representative, Admin, Owner)
-    if (isManager) {
+    // MANAGER VIEW (Representative, Admin, Owner, and Grades Assistant)
+    if (canManageGrades) {
       const draftAllocatedTotal = customAssessmentsDraft.reduce(
         (acc, a) => acc + Number(a.maxScore || 0),
         0
@@ -6219,8 +6380,8 @@ export default function App() {
       return false;
     });
 
-    // MANAGER VIEW (Representative, Admin, Owner)
-    if (isManager) {
+    // MANAGER VIEW (Representative, Admin, Owner, and Attendance Assistant)
+    if (canManageAttendance) {
       if (selectedSessionId) {
         // View specific session attendance
         const session = attendanceSessions.find(
@@ -8399,7 +8560,7 @@ export default function App() {
                 >
                   <Star size={16} className={isBookmarked ? "fill-current" : ""} />
                 </button>
-                {isManager && (
+                {canManageMaterials && (
                   <button
                     onClick={() => handleDeleteMaterialItem(mat.id)}
                     className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition"
@@ -8565,7 +8726,7 @@ export default function App() {
                 </div>
               )}
 
-              {isManager && (
+              {canManageMaterials && (
                 <button
                   onClick={() => setIsAddingMaterial(true)}
                   className="bg-primary text-white px-5 py-2.5 rounded-2xl text-xs md:text-sm font-bold shadow-lg shadow-primary/30 hover:bg-primary/90 transition flex items-center gap-2 active:scale-95"
@@ -8832,7 +8993,7 @@ export default function App() {
                 </div>
               </div>
 
-              {isManager && (
+              {canManageMaterials && (
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     onClick={() => {
@@ -9415,6 +9576,23 @@ export default function App() {
                       {isAssistant && (
                         <span className="text-[9px] px-1.5 py-0.5 bg-blue-500/10 text-blue-600 rounded font-bold">معاون 🎖️</span>
                       )}
+                      {(() => {
+                        const senderUser = appUsers.find((u) => u.uid === msg.senderId);
+                        const duties = senderUser?.assistantDuties || [];
+                        return duties.map((dutyKey) => {
+                          const dutyConf = ASSISTANT_DUTIES_CONFIG[dutyKey];
+                          if (!dutyConf) return null;
+                          return (
+                            <span
+                              key={dutyKey}
+                              className={`text-[9px] px-1.5 py-0.5 rounded font-bold border ${dutyConf.color} ${dutyConf.bgLight}`}
+                              title={dutyConf.description}
+                            >
+                              {dutyConf.badge}
+                            </span>
+                          );
+                        });
+                      })()}
                       <span className="text-[8px] text-gray-300">
                         {new Date(msg.timestamp).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
                       </span>
@@ -9435,8 +9613,31 @@ export default function App() {
                       )}
 
                       {msg.type === 'image' && msg.mediaUrl && (
-                        <div className="mb-2 rounded-lg overflow-hidden border border-white/20">
-                          <img src={msg.mediaUrl} alt="chat" className="max-w-full h-auto max-h-60 object-cover" />
+                        <div
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPreviewZoom(1);
+                            setPreviewRotation(0);
+                            setPreviewItem({
+                              title: `صورة من ${msg.senderName}`,
+                              url: msg.mediaUrl!,
+                              type: "IMAGE",
+                            });
+                          }}
+                          className="mb-2 rounded-xl overflow-hidden border border-white/20 cursor-pointer group/chatimg relative"
+                          title="اضغط لتكبير الصورة"
+                        >
+                          <img
+                            src={msg.mediaUrl}
+                            alt="chat"
+                            className="max-w-full h-auto max-h-60 object-cover group-hover/chatimg:scale-105 transition-transform duration-200"
+                          />
+                          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover/chatimg:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                            <span className="bg-black/75 backdrop-blur-md text-white text-[11px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-md">
+                              <Eye size={12} />
+                              <span>تكبير</span>
+                            </span>
+                          </div>
                         </div>
                       )}
                       
@@ -10640,10 +10841,10 @@ export default function App() {
   };
 
   const renderCourseManagement = () => {
-    if (!isManager)
+    if (!isManager && !canManageMaterials)
       return (
         <div className="p-8 text-center text-gray-500">
-          هذه الصفحة مخصصة لممثلي الدفعات والمشرفين فقط.
+          هذه الصفحة مخصصة لممثلي الدفعات ومسؤولي الملازم والمشرفين فقط.
         </div>
       );
 
@@ -10830,9 +11031,7 @@ export default function App() {
   };
 
   const renderProjects = () => {
-    const isManager =
-      currentUser?.role === UserRole.REPRESENTATIVE ||
-      currentUser?.role === UserRole.OWNER;
+    const isManager = canManageAssignments;
 
     const batchStudents = appUsers.filter((u) => {
       if (u.role === UserRole.OWNER) return false;
@@ -11949,9 +12148,7 @@ export default function App() {
 
   // --- Assignments (الواجبات والتكليفات) View ---
   const renderAssignments = () => {
-    const isManager =
-      currentUser?.role === UserRole.REPRESENTATIVE ||
-      currentUser?.role === UserRole.OWNER;
+    const isManager = canManageAssignments;
 
     const batchStudents = appUsers.filter((u) => u.batchCode === effectiveBatchCode);
 
@@ -12221,9 +12418,9 @@ export default function App() {
 
                       {/* Description */}
                       {assign.description && (
-                        <p className="text-gray-600 dark:text-gray-300 text-xs md:text-sm whitespace-pre-line leading-relaxed mb-4">
-                          {assign.description}
-                        </p>
+                        <div className="text-gray-600 dark:text-gray-300 text-xs md:text-sm leading-relaxed mb-4">
+                          <FormattedTextRenderer content={assign.description} />
+                        </div>
                       )}
 
                       {/* Live Detailed Countdown Ticker */}
@@ -12411,17 +12608,13 @@ export default function App() {
                   </div>
                 </div>
 
-                <div>
-                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
-                    تفاصيل ومتطلبات الواجب (اختياري)
-                  </label>
-                  <textarea
-                    value={newAssignDesc}
-                    onChange={(e) => setNewAssignDesc(e.target.value)}
-                    placeholder="اكتب تعليمات الأستاذ، طريقة التسليم، أو أي ملاحظات هامة..."
-                    className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-sm outline-none resize-none h-24 focus:ring-2 focus:ring-primary/20 transition"
-                  />
-                </div>
+                <RichTextEditor
+                  value={newAssignDesc}
+                  onChange={setNewAssignDesc}
+                  placeholder="اكتب تعليمات الأستاذ، طريقة التسليم، النقاط المهمة، ولون التنبيهات مثل التلي (عريض، مائل، سبويلر) ✍️"
+                  label="تفاصيل ومتطلبات الواجب بالتنسيق الغني (اختياري)"
+                  minHeight="min-h-[140px]"
+                />
 
                 <div>
                   <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
@@ -13424,6 +13617,19 @@ export default function App() {
                                 <span>ممثل معاون 🎖️</span>
                               </span>
                             )}
+                            {student.assistantDuties && student.assistantDuties.map((dutyKey) => {
+                              const dutyConf = ASSISTANT_DUTIES_CONFIG[dutyKey];
+                              if (!dutyConf) return null;
+                              return (
+                                <span
+                                  key={dutyKey}
+                                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border flex items-center gap-1 shadow-2xs ${dutyConf.color} ${dutyConf.bgLight}`}
+                                  title={dutyConf.description}
+                                >
+                                  <span>{dutyConf.badge}</span>
+                                </span>
+                              );
+                            })}
                             {isExcluded ? (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-500 dark:bg-slate-700 dark:text-gray-400 flex items-center gap-1">
                                 <EyeOff size={11} />
@@ -13521,6 +13727,23 @@ export default function App() {
                             </button>
                           )}
 
+                          {/* Assign / Manage Specific Assistant Duties (Main Admin only) */}
+                          {isMainAdmin && student.uid !== currentUser?.uid && !isRep && !student.isOfficial && (
+                            <button
+                              onClick={() => setDutyTargetStudent(student)}
+                              className="px-3 py-1.5 bg-gradient-to-r from-purple-50 to-indigo-50 hover:from-purple-100 hover:to-indigo-100 text-purple-700 dark:text-purple-300 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/50 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm active:scale-95"
+                              title="إسناد رتب محددة لهذا الطالب (مسؤول حضور، درجات، ملازم، تبليغات، واجبات)"
+                            >
+                              <ShieldCheck size={13} className="text-purple-600" />
+                              <span>إسناد الرتب والمهام 🎖️</span>
+                              {student.assistantDuties && student.assistantDuties.length > 0 && (
+                                <span className="bg-purple-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+                                  {student.assistantDuties.length}
+                                </span>
+                              )}
+                            </button>
+                          )}
+
                           {/* Assistant Representative Toggle (Main Admin only, for other students) */}
                           {isMainAdmin && student.uid !== currentUser?.uid && !isRep && !student.isOfficial && (
                             <>
@@ -13537,10 +13760,10 @@ export default function App() {
                                 <button
                                   onClick={() => handleToggleAssistantRep(student)}
                                   className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-200 dark:border-blue-900/40 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm active:scale-95"
-                                  title="ترقية وتعيين الطالب كممثل معاون للدفعة"
+                                  title="ترقية وتعيين الطالب كممثل معاون عام للدفعة"
                                 >
                                   <Award size={13} className="text-blue-600 dark:text-blue-400" />
-                                  <span>تعيين كممثل معاون 🎖️</span>
+                                  <span>ممثل معاون عام 🎖️</span>
                                 </button>
                               )}
                             </>
@@ -13870,15 +14093,37 @@ export default function App() {
     const userBatch = batches.find(
       (b) => b.code === (userToDisplay.batchCode || effectiveBatchCode)
     );
-    const totalBatchSessions = attendanceSessions.length;
-    const userPresentRecords = attendanceRecords.filter(
-      (r) =>
-        r.studentId === userToDisplay.uid &&
-        (r.status === "PRESENT" || r.status === "EXCUSED")
+    // Filter sessions relevant to this specific student (group-aware & exception-aware, matching the attendance report 100%)
+    const userRelevantSessions = attendanceSessions.filter((s) => {
+      const hasStudentRecord = attendanceRecords.some(
+        (r) => r.sessionId === s.id && r.studentId === userToDisplay.uid
+      );
+      if (hasStudentRecord) return true;
+      if (s.targetGroup && s.targetGroup !== "ALL") {
+        return userToDisplay.academicGroup === s.targetGroup;
+      }
+      return true;
+    });
+
+    const userRelevantSessionIds = new Set(userRelevantSessions.map((s) => s.id));
+    const userRecordsInRelevantSessions = attendanceRecords.filter(
+      (r) => r.studentId === userToDisplay.uid && userRelevantSessionIds.has(r.sessionId)
+    );
+
+    const totalStudentSessions = userRelevantSessions.length;
+    const userPresentCount = userRecordsInRelevantSessions.filter(
+      (r) => r.status === "PRESENT"
     ).length;
+    const userAbsentCount = userRecordsInRelevantSessions.filter(
+      (r) => r.status === "ABSENT"
+    ).length;
+    const userExcusedCount = userRecordsInRelevantSessions.filter(
+      (r) => r.status === "EXCUSED"
+    ).length;
+
     const overallAttendancePct =
-      totalBatchSessions > 0
-        ? Math.round((userPresentRecords / totalBatchSessions) * 100)
+      totalStudentSessions > 0
+        ? Math.round(((userPresentCount + userExcusedCount) / totalStudentSessions) * 100)
         : 100;
 
     const totalBatchAssignments = assignments.length;
@@ -14042,6 +14287,54 @@ export default function App() {
 
     return (
       <div className="space-y-6 p-4">
+        {/* Navigation / Back Button Strip */}
+        {viewingUserProfile ? (
+          <div className="bg-white dark:bg-slate-800 p-3.5 px-5 rounded-3xl border border-gray-100 dark:border-slate-700 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+            <button
+              type="button"
+              onClick={handleBackFromProfile}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-primary/10 hover:bg-primary/20 text-primary dark:text-blue-400 font-black text-xs sm:text-sm transition active:scale-95 shadow-xs self-start sm:self-auto cursor-pointer"
+            >
+              <ArrowRight size={18} className="rtl:rotate-0 ltr:rotate-180" />
+              <span>
+                الرجوع إلى {previousTabBeforeProfile ? `(${previousTabBeforeProfile})` : "السابق"}
+              </span>
+            </button>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-400 font-bold">
+                أنت تستعرض ملف الطالب:
+              </span>
+              <span className="text-xs font-black text-gray-800 dark:text-white bg-gray-100 dark:bg-slate-700 px-3 py-1 rounded-xl">
+                {userToDisplay.name}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setViewingUserProfile(null);
+                  setActiveTab(Tab.PROFILE);
+                }}
+                className="text-xs font-bold text-primary hover:underline transition mr-2"
+              >
+                الذهاب لحسابي الشخصي 👤
+              </button>
+            </div>
+          </div>
+        ) : (
+          previousTabBeforeProfile && previousTabBeforeProfile !== Tab.PROFILE && (
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setActiveTab(previousTabBeforeProfile)}
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-primary transition bg-white dark:bg-slate-800 px-3.5 py-1.5 rounded-xl border border-gray-100 dark:border-slate-700 shadow-xs"
+              >
+                <ArrowRight size={14} className="rtl:rotate-0 ltr:rotate-180" />
+                <span>العودة إلى ({previousTabBeforeProfile})</span>
+              </button>
+            </div>
+          )
+        )}
+
         {/* Profile Header */}
         <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 overflow-hidden relative group">
           <div className="h-48 bg-gradient-to-r from-blue-400 to-indigo-500 relative">
@@ -14113,11 +14406,35 @@ export default function App() {
                     <span>ممثل معاون 🎖️</span>
                   </span>
                 )}
+                {userToDisplay.assistantDuties && userToDisplay.assistantDuties.map((dutyKey) => {
+                  const dutyConf = ASSISTANT_DUTIES_CONFIG[dutyKey];
+                  if (!dutyConf) return null;
+                  return (
+                    <span
+                      key={dutyKey}
+                      className={`text-xs px-2.5 py-0.5 rounded-full font-bold border flex items-center gap-1 ${dutyConf.color} ${dutyConf.bgLight}`}
+                      title={dutyConf.description}
+                    >
+                      <span>{dutyConf.badge}</span>
+                    </span>
+                  );
+                })}
               </h2>
               <div className="flex flex-col md:flex-row md:items-center gap-2 md:justify-between mt-1">
                 <p className="text-gray-500 dark:text-gray-400 text-sm">
                   @{userToDisplay.username || "user"}
                 </p>
+
+                {isMainAdmin && !isOwnProfile && userToDisplay.role !== UserRole.REPRESENTATIVE && !userToDisplay.isOfficial && (
+                  <button
+                    onClick={() => setDutyTargetStudent(userToDisplay)}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/50 px-3.5 py-1.5 rounded-xl hover:bg-purple-100 transition active:scale-95"
+                    title="تعديل مهام ورتب هذا الطالب"
+                  >
+                    <ShieldCheck size={14} className="text-purple-600" />
+                    <span>إسناد وتعديل الرتب الإدارية 🎖️</span>
+                  </button>
+                )}
 
                 {isOwnProfile && currentUser?.role === UserRole.REPRESENTATIVE && (
                   <button
@@ -14215,6 +14532,9 @@ export default function App() {
                   >
                     {overallAttendancePct}%
                   </span>
+                  <span className="text-[9px] text-blue-200/80 block mt-0.5 font-bold">
+                    ({userPresentCount + userExcusedCount} من {totalStudentSessions} محاضرة)
+                  </span>
                 </div>
 
                 <div className="bg-white/10 backdrop-blur-md border border-white/10 rounded-2xl p-3 text-center">
@@ -14231,6 +14551,33 @@ export default function App() {
                   </span>
                 </div>
               </div>
+            </div>
+
+            {/* Quick Attendance Breakdown Strip - 100% Synchronized with Official Report */}
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-white/5 border border-white/10 rounded-2xl p-2.5 px-4 text-xs font-bold">
+              <div className="flex items-center gap-3 text-[11px] flex-wrap">
+                <span className="text-emerald-300 flex items-center gap-1">
+                  <CheckCircle2 size={13} />
+                  <span>حضور: {userPresentCount}</span>
+                </span>
+                <span className="text-white/20">•</span>
+                <span className="text-rose-300 flex items-center gap-1">
+                  <AlertCircle size={13} />
+                  <span>غياب: {userAbsentCount}</span>
+                </span>
+                <span className="text-white/20">•</span>
+                <span className="text-amber-300 flex items-center gap-1">
+                  <Clock size={13} />
+                  <span>إجازة / عذر: {userExcusedCount}</span>
+                </span>
+                <span className="text-white/20">•</span>
+                <span className="text-blue-200">
+                  المقرر: {totalStudentSessions} محاضرة
+                </span>
+              </div>
+              <span className="text-[10px] text-blue-300/90 font-mono">
+                مطابق للتقرير الفصلي 100% 📄
+              </span>
             </div>
 
             {/* Download Attendance PDF Report Button inside Student ID Card */}
@@ -14469,7 +14816,12 @@ export default function App() {
   return (
     <Layout
       activeTab={activeTab}
-      onTabChange={setActiveTab}
+      onTabChange={(newTab) => {
+        if (newTab === Tab.PROFILE) {
+          setViewingUserProfile(null);
+        }
+        setActiveTab(newTab);
+      }}
       user={currentUser}
       onLogout={handleLogout}
       onOpenRepModal={isOwner ? () => setIsRepManagerOpen(true) : undefined}
@@ -14637,14 +14989,20 @@ export default function App() {
         />
       )}
 
-      {/* Modal: In-App Image Viewer ONLY */}
+      {/* Modal: In-App Image Viewer / Lightbox */}
       {previewItem && previewItem.type === "IMAGE" && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex flex-col p-3 sm:p-6 animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-800 w-full max-w-5xl mx-auto rounded-3xl shadow-2xl border border-gray-100 dark:border-slate-700 flex flex-col flex-1 overflow-hidden">
+        <div
+          onClick={() => setPreviewItem(null)}
+          className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex flex-col p-2 sm:p-6 animate-in fade-in duration-200 cursor-zoom-out"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-800 w-full max-w-5xl mx-auto rounded-3xl shadow-2xl border border-gray-100 dark:border-slate-700 flex flex-col flex-1 overflow-hidden cursor-default"
+          >
             {/* Viewer Header */}
-            <div className="p-4 border-b border-gray-100 dark:border-slate-700 flex items-center justify-between gap-3">
+            <div className="p-3.5 sm:p-4 border-b border-gray-100 dark:border-slate-700 flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-2xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
                   <ImageIcon size={20} />
                 </div>
                 <div className="min-w-0">
@@ -14652,24 +15010,75 @@ export default function App() {
                     {previewItem.title}
                   </h3>
                   <p className="text-[11px] text-gray-400">
-                    معاينة الصورة
+                    معاينة ومراجعة الصورة (تكبير، تدوير، تحميل)
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              {/* Controls Toolbar */}
+              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                {/* Zoom Out */}
                 <button
-                  onClick={() => {
-                    downloadFile(previewItem.url, `${previewItem.title}.jpg`);
-                  }}
-                  className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold shadow-sm flex items-center gap-1.5 transition active:scale-95"
+                  type="button"
+                  onClick={() => setPreviewZoom((z) => Math.max(0.5, Number((z - 0.25).toFixed(2))))}
+                  className="p-2 rounded-xl bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-slate-600 transition"
+                  title="تصغير (-)"
                 >
-                  <Download size={15} />
-                  <span>تنزيل الصورة</span>
+                  <ZoomOut size={16} />
                 </button>
+
+                {/* Zoom Reset / Display */}
                 <button
+                  type="button"
+                  onClick={() => {
+                    setPreviewZoom(1);
+                    setPreviewRotation(0);
+                  }}
+                  className="px-2.5 py-1.5 rounded-xl bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-slate-600 text-xs font-mono font-bold transition"
+                  title="إعادة ضبط الحجم والتدوير"
+                >
+                  {Math.round(previewZoom * 100)}%
+                </button>
+
+                {/* Zoom In */}
+                <button
+                  type="button"
+                  onClick={() => setPreviewZoom((z) => Math.min(3, Number((z + 0.25).toFixed(2))))}
+                  className="p-2 rounded-xl bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-slate-600 transition"
+                  title="تكبير (+)"
+                >
+                  <ZoomIn size={16} />
+                </button>
+
+                {/* Rotate */}
+                <button
+                  type="button"
+                  onClick={() => setPreviewRotation((r) => (r + 90) % 360)}
+                  className="p-2 rounded-xl bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-slate-600 transition"
+                  title="تدوير الصورة 90 درجة"
+                >
+                  <RotateCw size={16} />
+                </button>
+
+                {/* Download */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    downloadFile(previewItem.url, `${previewItem.title || "image"}.jpg`);
+                  }}
+                  className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold shadow-sm flex items-center gap-1.5 transition active:scale-95"
+                  title="تحميل الصورة إلى جهازك"
+                >
+                  <Download size={14} />
+                  <span className="hidden sm:inline">تحميل</span>
+                </button>
+
+                {/* Close Button */}
+                <button
+                  type="button"
                   onClick={() => setPreviewItem(null)}
-                  className="w-9 h-9 bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 rounded-xl flex items-center justify-center text-gray-600 dark:text-gray-300 transition"
+                  className="w-9 h-9 bg-gray-100 dark:bg-slate-700 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/30 rounded-xl flex items-center justify-center text-gray-600 dark:text-gray-300 transition"
+                  title="إغلاق المعاينة"
                 >
                   <X size={18} />
                 </button>
@@ -14677,18 +15086,28 @@ export default function App() {
             </div>
 
             {/* Viewer Body */}
-            <div className="flex-1 bg-gray-100 dark:bg-slate-900 relative overflow-auto flex items-center justify-center p-2">
+            <div className="flex-1 bg-slate-950/90 relative overflow-hidden flex items-center justify-center p-4 select-none">
               {isLoadingPreview ? (
-                <div className="flex flex-col items-center gap-3 text-gray-500 dark:text-gray-400">
+                <div className="flex flex-col items-center gap-3 text-gray-400">
                   <Loader2 size={32} className="animate-spin text-primary" />
-                  <span className="text-xs font-bold">جاري فتح الصورة...</span>
+                  <span className="text-xs font-bold">جاري فتح الصورة بأعلى دقة...</span>
                 </div>
               ) : (
-                <img
-                  src={resolvedPreviewUrl || previewItem.url}
-                  alt={previewItem.title}
-                  className="max-w-full max-h-full object-contain rounded-xl shadow-md"
-                />
+                <div
+                  className="w-full h-full flex items-center justify-center overflow-auto"
+                  onDoubleClick={() => setPreviewZoom((z) => (z === 1 ? 1.75 : 1))}
+                  title="انقر نقراً مزدوجاً للتبديل بين التكبير وإعادة الضبط"
+                >
+                  <img
+                    src={resolvedPreviewUrl || previewItem.url}
+                    alt={previewItem.title}
+                    style={{
+                      transform: `scale(${previewZoom}) rotate(${previewRotation}deg)`,
+                      transition: "transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)",
+                    }}
+                    className="max-w-full max-h-full object-contain rounded-xl shadow-2xl cursor-grab"
+                  />
+                </div>
               )}
             </div>
           </div>
@@ -14776,6 +15195,177 @@ export default function App() {
                   <ShieldCheck size={15} />
                 )}
                 <span>تأكيد وتفعيل الرتبة</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Assign / Manage Assistant Duties for Batch Members */}
+      {dutyTargetStudent && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-800 w-full max-w-xl rounded-3xl shadow-2xl p-6 animate-in zoom-in-95 border border-gray-100 dark:border-slate-700 max-h-[92vh] flex flex-col">
+            {/* Header */}
+            <div className="flex justify-between items-start pb-4 border-b border-gray-100 dark:border-slate-700">
+              <div className="flex items-center gap-3">
+                <img
+                  src={dutyTargetStudent.avatar}
+                  alt={dutyTargetStudent.name}
+                  className="w-12 h-12 rounded-2xl object-cover border-2 border-primary/20 shadow-xs"
+                />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-black text-lg text-gray-800 dark:text-white">
+                      إسناد الرتب والمهام الإدارية 🎖️
+                    </h3>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    للطالب: <strong className="text-gray-800 dark:text-white">{dutyTargetStudent.name}</strong> (@{dutyTargetStudent.username || "طالب"})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDutyTargetStudent(null)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-xl"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Explanatory Banner */}
+            <div className="my-4 p-3.5 rounded-2xl bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-950/30 dark:to-indigo-950/30 border border-purple-200/80 dark:border-purple-800/50 text-xs text-purple-900 dark:text-purple-200 leading-relaxed space-y-1">
+              <div className="font-bold flex items-center gap-1.5 text-purple-950 dark:text-purple-100">
+                <ShieldCheck size={16} className="text-purple-600 dark:text-purple-400" />
+                <span>نظام المساعدين والرتب المحددة</span>
+              </div>
+              <p>
+                حدد المهام التي ترغب في توكيلها لهذا الطالب. سيمتلك صلاحيات إدارة وتعديل الأقسام المحددة له فقط (مع شارة رتبة رسمية تظهر لزملائه)، ويمكنك سحب أي مهمة فوراً بضغطة زر.
+              </p>
+            </div>
+
+            {/* Quick Actions (Select All / Clear All) */}
+            <div className="flex items-center justify-between text-xs px-1 mb-2">
+              <span className="font-bold text-gray-500 dark:text-gray-400">
+                المهام الموكلة حالياً: ({(dutyTargetStudent.assistantDuties || []).length} من {Object.keys(ASSISTANT_DUTIES_CONFIG).length})
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={isUpdatingDuty}
+                  onClick={async () => {
+                    const allDuties = Object.values(AssistantDuty);
+                    const updatedUser: User = {
+                      ...dutyTargetStudent,
+                      assistantDuties: allDuties,
+                    };
+                    setIsUpdatingDuty(true);
+                    try {
+                      await saveUserToFirestore(updatedUser);
+                      setDutyTargetStudent(updatedUser);
+                    } finally {
+                      setIsUpdatingDuty(false);
+                    }
+                  }}
+                  className="text-primary hover:underline font-bold text-[11px]"
+                >
+                  منح كافة الرتب
+                </button>
+                <span>•</span>
+                <button
+                  type="button"
+                  disabled={isUpdatingDuty || !(dutyTargetStudent.assistantDuties?.length)}
+                  onClick={async () => {
+                    const updatedUser: User = {
+                      ...dutyTargetStudent,
+                      assistantDuties: [],
+                    };
+                    setIsUpdatingDuty(true);
+                    try {
+                      await saveUserToFirestore(updatedUser);
+                      setDutyTargetStudent(updatedUser);
+                    } finally {
+                      setIsUpdatingDuty(false);
+                    }
+                  }}
+                  className="text-red-500 hover:underline font-bold text-[11px] disabled:opacity-40"
+                >
+                  سحب كافة الصلاحيات
+                </button>
+              </div>
+            </div>
+
+            {/* Duties List */}
+            <div className="space-y-2.5 overflow-y-auto no-scrollbar flex-1 py-1">
+              {Object.values(ASSISTANT_DUTIES_CONFIG).map((duty) => {
+                const isAssigned = (dutyTargetStudent.assistantDuties || []).includes(duty.id);
+                return (
+                  <div
+                    key={duty.id}
+                    onClick={() => !isUpdatingDuty && handleToggleUserDuty(dutyTargetStudent, duty.id)}
+                    className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-start justify-between gap-3 ${
+                      isAssigned
+                        ? `${duty.bgLight} border-primary/40 ring-1 ring-primary/20 shadow-xs`
+                        : "bg-gray-50 dark:bg-slate-700/40 border-gray-200 dark:border-slate-700 hover:border-gray-300"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div className="shrink-0 mt-0.5">
+                        {isAssigned ? (
+                          <div className="w-5 h-5 rounded-lg bg-primary text-white flex items-center justify-center shadow-xs">
+                            <Check size={13} />
+                          </div>
+                        ) : (
+                          <div className="w-5 h-5 rounded-lg border-2 border-gray-300 dark:border-slate-500" />
+                        )}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-bold text-sm text-gray-800 dark:text-white">
+                            {duty.label}
+                          </h4>
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${duty.color} ${duty.bgLight}`}>
+                            {duty.badge}
+                          </span>
+                          {isAssigned && (
+                            <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md">
+                              مفعّل ✅
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-600 dark:text-gray-300 mt-1 leading-relaxed">
+                          {duty.description}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={isUpdatingDuty}
+                      className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-bold transition active:scale-95 ${
+                        isAssigned
+                          ? "bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 dark:bg-red-950/40 dark:border-red-800/40"
+                          : "bg-primary hover:bg-primary/90 text-white shadow-xs"
+                      }`}
+                    >
+                      {isAssigned ? "سحب المهمة" : "إسناد المهمة +"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Footer */}
+            <div className="pt-4 border-t border-gray-100 dark:border-slate-700 flex justify-between items-center gap-3">
+              <span className="text-xs text-gray-400">
+                {isUpdatingDuty ? "جاري حفظ التحديثات..." : "يتم حفظ التغييرات وإشعار الطالب فورياً"}
+              </span>
+              <button
+                type="button"
+                onClick={() => setDutyTargetStudent(null)}
+                className="px-6 py-2.5 bg-primary text-white rounded-xl text-xs font-bold shadow-md shadow-primary/20 hover:bg-primary/90 transition active:scale-95"
+              >
+                إتمام وإنهاء
               </button>
             </div>
           </div>
