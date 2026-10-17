@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Bold,
   Italic,
@@ -99,21 +99,46 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   const colorInputRef = useRef<HTMLInputElement>(null);
   const markerInputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize and synchronize content safely
+  // Synchronize content safely whenever value changes or activeTab switches
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
 
     // Only update innerHTML if it doesn't match to avoid losing cursor while typing
-    if (editor.innerHTML !== value) {
-      // If value is empty or null, set empty
-      if (!value) {
-        editor.innerHTML = '';
-      } else {
-        editor.innerHTML = value;
+    const targetVal = value || '';
+    if (editor.innerHTML !== targetVal) {
+      editor.innerHTML = targetVal;
+    }
+  }, [value, activeTab]);
+
+  // Immediately commit changes from editor DOM to value
+  const syncFromEditor = useCallback(() => {
+    if (editorRef.current) {
+      const html = editorRef.current.innerHTML;
+      if (html !== value) {
+        onChange(html);
       }
     }
-  }, [value]);
+  }, [value, onChange]);
+
+  // Tab switcher with reliable state preservation
+  const handleSwitchTab = (tab: 'write' | 'preview') => {
+    if (tab === 'preview') {
+      // Sync immediately before switching to preview
+      if (editorRef.current) {
+        const currentHtml = editorRef.current.innerHTML;
+        if (currentHtml !== value) {
+          onChange(currentHtml);
+        }
+      }
+    } else if (tab === 'write') {
+      // Ensure editor innerHTML has the latest value when returning to write mode
+      if (editorRef.current && editorRef.current.innerHTML !== (value || '')) {
+        editorRef.current.innerHTML = value || '';
+      }
+    }
+    setActiveTab(tab);
+  };
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -255,9 +280,14 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
     }
   };
 
-  // Word & character stats
-  const plainText = (editorRef.current?.innerText || '').trim();
-  const wordCount = plainText ? plainText.split(/\s+/).length : 0;
+  // Word & character stats calculated from value
+  const plainText = useMemo(() => {
+    if (!value) return '';
+    const clean = value.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').trim();
+    return clean;
+  }, [value]);
+
+  const wordCount = plainText ? plainText.split(/\s+/).filter(Boolean).length : 0;
   const charCount = plainText.length;
 
   return (
@@ -277,7 +307,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
         <div className="flex items-center gap-1 bg-gray-100 dark:bg-slate-700/60 p-1 rounded-xl text-xs font-bold mr-auto">
           <button
             type="button"
-            onClick={() => setActiveTab('write')}
+            onClick={() => handleSwitchTab('write')}
             className={`px-3 py-1 rounded-lg transition flex items-center gap-1.5 ${
               activeTab === 'write'
                 ? 'bg-white dark:bg-slate-800 text-primary shadow-xs'
@@ -285,11 +315,11 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
             }`}
           >
             <Edit3 size={13} />
-            <span>محرر مرئي مباشر (WYSIWYG)</span>
+            <span>تحرير</span>
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab('preview')}
+            onClick={() => handleSwitchTab('preview')}
             className={`px-3 py-1 rounded-lg transition flex items-center gap-1.5 ${
               activeTab === 'preview'
                 ? 'bg-white dark:bg-slate-800 text-primary shadow-xs'
@@ -297,7 +327,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
             }`}
           >
             <Eye size={13} />
-            <span>معاينة العرض النهائي ✨</span>
+            <span>معاينة</span>
           </button>
         </div>
       </div>
@@ -668,7 +698,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
               type="button"
               onClick={() => setShowHelp(!showHelp)}
               className="p-1.5 text-gray-400 hover:text-primary transition rounded-lg"
-              title="دليل المحرر المرئي"
+              title="دليل التنسيق"
             >
               <HelpCircle size={15} />
             </button>
@@ -756,7 +786,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
         {showHelp && activeTab === 'write' && (
           <div className="bg-primary/5 dark:bg-primary/10 border-b border-primary/20 p-3 text-[11px] text-gray-600 dark:text-gray-300 space-y-1">
             <div className="flex justify-between items-center font-bold text-primary">
-              <span>💡 دليلك للكتابة المرئية النقية:</span>
+              <span>💡 دليلك للكتابة والتنسيق السريع:</span>
               <button
                 type="button"
                 onClick={() => setShowHelp(false)}
@@ -777,36 +807,41 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           </div>
         )}
 
-        {/* WYSIWYG Visual Canvas Body */}
-        {activeTab === 'write' ? (
-          <div className="relative p-4">
-            <div
-              ref={editorRef}
-              contentEditable
-              dir={textDirection}
-              onInput={handleEditorInput}
-              onSelect={handleSelectionCheck}
-              onKeyUp={handleSelectionCheck}
-              onMouseUp={handleSelectionCheck}
-              data-placeholder={placeholder}
-              className={`wysiwyg-editor outline-none text-gray-900 dark:text-gray-100 text-xs sm:text-sm leading-relaxed ${minHeight} select-text overflow-y-auto`}
-              style={{
-                fontFamily: "'Cairo', 'Tajawal', sans-serif",
-              }}
-            />
-          </div>
-        ) : (
-          /* Live Output Preview Mode */
-          <div className={`p-5 bg-gray-50/50 dark:bg-slate-900/40 ${minHeight} overflow-y-auto`}>
-            {value.trim() ? (
-              <FormattedTextRenderer content={value} />
-            ) : (
-              <div className="text-center py-10 text-gray-400 text-xs">
-                لا يوجد نص لعرضه حالياً، ارجع للمحرر لبدء الكتابة والتنسيق.
-              </div>
-            )}
-          </div>
-        )}
+        {/* Visual Canvas Body - Preserved in DOM so text is never lost when toggling preview */}
+        <div className={activeTab === 'write' ? 'relative p-4' : 'hidden'}>
+          <div
+            ref={editorRef}
+            contentEditable
+            dir={textDirection}
+            onInput={handleEditorInput}
+            onBlur={handleEditorInput}
+            onSelect={handleSelectionCheck}
+            onKeyUp={handleSelectionCheck}
+            onMouseUp={handleSelectionCheck}
+            data-placeholder={placeholder}
+            className={`wysiwyg-editor outline-none text-gray-900 dark:text-gray-100 text-xs sm:text-sm leading-relaxed ${minHeight} select-text overflow-y-auto`}
+            style={{
+              fontFamily: "'Cairo', 'Tajawal', sans-serif",
+            }}
+          />
+        </div>
+
+        {/* Live Output Preview Mode */}
+        <div
+          className={
+            activeTab === 'preview'
+              ? `p-5 bg-gray-50/50 dark:bg-slate-900/40 ${minHeight} overflow-y-auto`
+              : 'hidden'
+          }
+        >
+          {value && value.trim() ? (
+            <FormattedTextRenderer content={value} />
+          ) : (
+            <div className="text-center py-10 text-gray-400 text-xs">
+              لا يوجد نص لعرضه حالياً، ارجع للتحرير لبدء الكتابة والتنسيق.
+            </div>
+          )}
+        </div>
 
         {/* Footer Statistics */}
         <div className="bg-gray-50/80 dark:bg-slate-900/60 border-t border-gray-100 dark:border-slate-700/80 px-4 py-2 flex items-center justify-between text-[11px] text-gray-400">
@@ -814,10 +849,14 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
             <span className="font-bold text-gray-700 dark:text-gray-300">{wordCount} كلمة</span>
             <span>•</span>
             <span>{charCount} حرف</span>
-            <span>•</span>
-            <span className="text-emerald-600 dark:text-emerald-400 font-bold">
-              تنسيق مرئي مباشر نقي ✨
-            </span>
+            {value ? (
+              <>
+                <span>•</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                  <span>تم الحفظ تلقائياً ✓</span>
+                </span>
+              </>
+            ) : null}
           </div>
 
           {plainText.length > 0 && activeTab === 'write' && (

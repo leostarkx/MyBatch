@@ -350,13 +350,18 @@ export interface ChatMessage {
 // Navigation Tabs
 export enum Tab {
   HOME = 'الرئيسية',
+  STUDY_HUB = 'المركز الدراسي',
+  ACADEMIC_PATH = 'المسار الأكاديمي',
+  COMMUNITY_HUB = 'مجتمع الدفعة',
+  PROFILE = 'حسابي',
+
+  // Hub Sub-Tabs and Compatibility Aliases
   SCHEDULE = 'الجدول',
   GRADES = 'درجاتي',
   ATTENDANCE = 'الحضور',
   MATERIALS = 'المحاضرات',
   SUMMARIES = 'الملخصات',
   CHAT = 'الدفعة',
-  PROFILE = 'حسابي',
   STUDENTS = 'الطلاب',
   BATCHES = 'إدارة الدفعات',
   REQUESTS = 'طلبات الانضمام',

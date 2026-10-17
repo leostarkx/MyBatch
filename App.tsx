@@ -10,6 +10,10 @@ import { NotificationPreferencesCard } from "./components/NotificationPreference
 import { NotificationCenterModal } from "./components/NotificationCenterModal";
 import { RichTextEditor } from "./components/RichTextEditor";
 import { FormattedTextRenderer } from "./components/FormattedTextRenderer";
+import { StudyHubView } from "./views/StudyHubView";
+import { AcademicPathView } from "./views/AcademicPathView";
+import { CommunityHubView } from "./views/CommunityHubView";
+import { UnifiedTasksHub } from "./components/UnifiedTasksHub";
 import {
   getUserNotificationPreferences,
   isCategoryEnabledForUser,
@@ -4264,6 +4268,43 @@ export default function App() {
   const handleDeleteAssignment = async (id: string) => {
     if (!confirm("هل أنت متأكد من حذف هذا الواجب؟")) return;
     await deleteAssignmentFromFirestore(id);
+  };
+
+  const handleSaveAssignmentFromHub = async (assign: Assignment, notifyBatch: boolean = false) => {
+    await saveAssignmentToFirestore(assign);
+    if (notifyBatch && currentUser) {
+      const formattedDue = new Date(assign.dueTimestamp).toLocaleString("ar-IQ", {
+        weekday: "long",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      const annContent = `تمت إضافة تكليف / واجب جديد لمادة ${assign.courseName}.\n\n📅 موعد التسليم النهائي: ${formattedDue}\n\n${assign.description || ""}`;
+      const ann: Announcement = {
+        id: `ann_${Date.now()}`,
+        batchCode: effectiveBatchCode,
+        title: `📝 واجب جديد: ${assign.title}`,
+        content: annContent,
+        timestamp: Date.now(),
+        authorId: currentUser.uid,
+        authorName: currentUser.name,
+        priority: "high",
+        courseId: assign.courseId,
+        courseName: assign.courseName,
+        attachments: [],
+      };
+      await saveAnnouncementToFirestore(ann);
+      await broadcastBatchNotification({
+        allUsers: appUsers,
+        batchCode: effectiveBatchCode,
+        excludeUid: currentUser.uid,
+        category: "ASSIGNMENT",
+        title: `📝 تكليف جديد: ${assign.title}`,
+        content: `موعد التسليم: ${formattedDue} لمادة ${assign.courseName}`,
+        targetTab: Tab.ASSIGNMENTS,
+      });
+    }
   };
 
   const handleToggleAssignmentDone = async (assign: Assignment) => {
@@ -14852,7 +14893,89 @@ export default function App() {
               onViewProfile={handleViewProfile}
             />
           )}
-          {activeTab === Tab.ASSIGNMENTS && renderAssignments()}
+          {activeTab === Tab.ASSIGNMENTS && (
+            <UnifiedTasksHub
+              currentUser={currentUser}
+              batchStudents={appUsers.filter((u) => u.batchCode === effectiveBatchCode)}
+              courses={courses}
+              assignments={assignments}
+              exams={exams}
+              effectiveBatchCode={effectiveBatchCode || ""}
+              isManager={isManager}
+              onSaveAssignment={handleSaveAssignmentFromHub}
+              onDeleteAssignment={handleDeleteAssignment}
+              onToggleAssignmentDone={handleToggleAssignmentDone}
+              onSaveExam={handleSaveExam}
+              onDeleteExam={handleDeleteExam}
+              onPreviewItem={setPreviewItem}
+            />
+          )}
+          {activeTab === Tab.STUDY_HUB && (
+            <StudyHubView
+              initialSubTab="tasks"
+              assignments={assignments}
+              exams={exams}
+              materials={materials}
+              materialSections={materialSections}
+              courses={courses}
+              currentUser={currentUser}
+              appUsers={appUsers}
+              effectiveBatchCode={effectiveBatchCode || ""}
+              isManager={isManager}
+              canManageMaterials={canManageMaterials}
+              canManageAssignments={canManageAssignments}
+              onToggleAssignmentDone={handleToggleAssignmentDone}
+              onOpenAddAssignment={handleOpenAddAssignment}
+              onOpenEditAssignment={handleOpenEditAssignment}
+              onDeleteAssignment={handleDeleteAssignment}
+              onSaveExam={handleSaveExam}
+              onDeleteExam={handleDeleteExam}
+              renderMaterialsContent={renderMaterials}
+              studentSummaries={studentSummaries}
+              onPreviewImage={(title, url) =>
+                setPreviewItem({ title, url, type: "IMAGE" })
+              }
+              onViewProfile={handleViewProfile}
+              currentTimer={currentTimer}
+            />
+          )}
+          {activeTab === Tab.ACADEMIC_PATH && (
+            <AcademicPathView
+              initialSubTab="grades"
+              currentUser={currentUser}
+              courses={courses}
+              grades={grades}
+              attendanceSessions={attendanceSessions}
+              attendanceRecords={attendanceRecords}
+              effectiveBatchCode={effectiveBatchCode || ""}
+              isManager={isManager}
+              onOpenAttendanceReport={(student) => {
+                setAttendanceReportStudent(student);
+              }}
+              renderGradesContent={renderGrades}
+              renderAttendanceContent={renderAttendance}
+              renderScheduleContent={renderSchedule}
+            />
+          )}
+          {activeTab === Tab.COMMUNITY_HUB && (
+            <CommunityHubView
+              initialSubTab="chat"
+              currentUser={currentUser}
+              appUsers={appUsers}
+              courses={courses}
+              grades={grades}
+              attendanceSessions={attendanceSessions}
+              attendanceRecords={attendanceRecords}
+              assignments={assignments}
+              materials={materials}
+              batchSuggestions={batchSuggestions}
+              effectiveBatchCode={effectiveBatchCode || ""}
+              isManager={isManager}
+              onViewProfile={handleViewProfile}
+              renderChatContent={renderChat}
+              renderProjectsContent={renderProjects}
+            />
+          )}
           {activeTab === Tab.SCHEDULE && renderSchedule()}
           {activeTab === Tab.GRADES && renderGrades()}
           {activeTab === Tab.ATTENDANCE && renderAttendance()}

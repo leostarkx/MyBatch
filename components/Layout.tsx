@@ -40,40 +40,89 @@ const Layout: React.FC<LayoutProps> = ({
 
   if (!user) return <>{children}</>;
 
-  let navItems = [
-    { id: Tab.HOME, icon: Home, label: 'الرئيسية' },
-    { id: Tab.LEADERBOARD, icon: Trophy, label: 'المتصدرين 🏆' },
-    { id: Tab.ASSIGNMENTS, icon: CheckSquare, label: 'المهام 📝' },
-    { id: Tab.SCHEDULE, icon: CalendarCheck, label: 'الجدول' },
-    { id: Tab.GRADES, icon: GraduationCap, label: 'الدرجات' },
-    { id: Tab.ATTENDANCE, icon: CalendarCheck, label: 'الحضور' },
-    { id: Tab.MATERIALS, icon: BookOpen, label: 'المحاضرات' },
-    { id: Tab.SUMMARIES, icon: FileText, label: 'الملخصات 📝' },
-    { id: Tab.SUGGESTIONS, icon: Inbox, label: 'صندوق الدفعة 📬' },
-    { id: Tab.PROJECTS, icon: Layers, label: 'المشاريع' },
-    { id: Tab.CHAT, icon: MessageSquare, label: 'الدفعة' },
-    { id: Tab.PROFILE, icon: UserIcon, label: 'حسابي' },
+  // Smart Hub Active State Calculators
+  const isStudyHubActive = [
+    Tab.STUDY_HUB,
+    Tab.ASSIGNMENTS,
+    Tab.MATERIALS,
+    Tab.SUMMARIES,
+  ].includes(activeTab);
+
+  const isAcademicPathActive = [
+    Tab.ACADEMIC_PATH,
+    Tab.GRADES,
+    Tab.ATTENDANCE,
+    Tab.SCHEDULE,
+  ].includes(activeTab);
+
+  const isCommunityHubActive = [
+    Tab.COMMUNITY_HUB,
+    Tab.CHAT,
+    Tab.SUGGESTIONS,
+    Tab.LEADERBOARD,
+    Tab.PROJECTS,
+  ].includes(activeTab);
+
+  const isProfileActive = activeTab === Tab.PROFILE;
+  const isHomeActive = activeTab === Tab.HOME;
+
+  // 4 Core Hubs + Profile
+  const coreHubs = [
+    {
+      id: Tab.HOME,
+      icon: Home,
+      label: 'الرئيسية',
+      sublabel: 'الموجز والعد التنازلي',
+      isActive: isHomeActive,
+    },
+    {
+      id: Tab.STUDY_HUB,
+      icon: BookOpen,
+      label: 'المركز الدراسي',
+      sublabel: 'المهام • الملازم • الملخصات',
+      isActive: isStudyHubActive,
+    },
+    {
+      id: Tab.ACADEMIC_PATH,
+      icon: GraduationCap,
+      label: 'المسار الأكاديمي',
+      sublabel: 'السعي • الحضور • الجدول',
+      isActive: isAcademicPathActive,
+    },
+    {
+      id: Tab.COMMUNITY_HUB,
+      icon: MessageSquare,
+      label: 'مجتمع الدفعة',
+      sublabel: 'الشات • المقترحات • المتصدرين',
+      isActive: isCommunityHubActive,
+    },
+    {
+      id: Tab.PROFILE,
+      icon: UserIcon,
+      label: 'حسابي والبطاقة',
+      sublabel: 'الملف الشخصي والبطاقة الرقمية',
+      isActive: isProfileActive,
+    },
   ];
 
-  // Filter based on role and batch membership
-  if (user.role === UserRole.STUDENT && !user.batchCode) {
-    navItems = [
-      { id: Tab.HOME, icon: Home, label: 'البداية' },
-      { id: Tab.PROFILE, icon: UserIcon, label: 'حسابي' },
-    ];
-  } else {
-    // Representative & Owner tabs
-    const hasMaterialsDuty = user.assistantDuties?.includes('MATERIALS' as any);
-    if (user.role === UserRole.REPRESENTATIVE || user.role === UserRole.OWNER) {
-      navItems.splice(6, 0, { id: Tab.STUDENTS, icon: Users, label: 'إدارة الطلاب' });
-      navItems.splice(7, 0, { id: Tab.COURSES, icon: BookOpen, label: 'المواد' });
-      navItems.splice(8, 0, { id: Tab.REQUESTS, icon: UserPlus, label: 'الطلبات' });
-    } else if (user.role === UserRole.ASSISTANT_REP || hasMaterialsDuty) {
-      navItems.splice(7, 0, { id: Tab.COURSES, icon: BookOpen, label: 'المواد' });
-    }
-    if (user.role === UserRole.OWNER) {
-      navItems.splice(9, 0, { id: Tab.BATCHES, icon: Layers, label: 'النسخ والدفعات' });
-    }
+  // Admin Management Items (for Reps & Owners)
+  const isManager =
+    user.role === UserRole.REPRESENTATIVE ||
+    user.role === UserRole.OWNER ||
+    user.role === UserRole.ASSISTANT_REP;
+
+  const adminNavItems: { id: Tab; icon: any; label: string; badge?: number }[] = [];
+  if (user.role === UserRole.REPRESENTATIVE || user.role === UserRole.OWNER) {
+    adminNavItems.push(
+      { id: Tab.STUDENTS, icon: Users, label: 'إدارة الطلاب' },
+      { id: Tab.COURSES, icon: Layers, label: 'المواد الدراسية' },
+      { id: Tab.REQUESTS, icon: UserPlus, label: 'طلبات الانضمام', badge: joinRequestsCount }
+    );
+  } else if (user.role === UserRole.ASSISTANT_REP) {
+    adminNavItems.push({ id: Tab.COURSES, icon: Layers, label: 'المواد الدراسية' });
+  }
+  if (user.role === UserRole.OWNER) {
+    adminNavItems.push({ id: Tab.BATCHES, icon: Layers, label: 'النسخ والدفعات' });
   }
 
   return (
@@ -116,39 +165,69 @@ const Layout: React.FC<LayoutProps> = ({
           )}
         </div>
 
-        <nav className="flex-1 p-4 space-y-2 overflow-y-auto no-scrollbar">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            const isRequestsTab = item.id === Tab.REQUESTS;
-            const hasRequests = isRequestsTab && joinRequestsCount > 0;
+        <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto no-scrollbar">
+          {/* Core Hub Navigation */}
+          {coreHubs.map((hub) => {
+            const Icon = hub.icon;
+            const isActive = hub.isActive;
 
             return (
               <button
-                key={item.id}
-                onClick={() => onTabChange(item.id)}
-                className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200 group relative ${
+                key={hub.id}
+                onClick={() => onTabChange(hub.id)}
+                className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-2xl transition-all duration-200 group relative text-right cursor-pointer ${
                   isActive 
-                    ? 'bg-primary text-white shadow-md shadow-primary/30' 
-                    : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-slate-700 hover:text-primary dark:hover:text-white'
+                    ? 'bg-primary text-white shadow-md shadow-primary/25' 
+                    : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-slate-700/60 hover:text-primary dark:hover:text-white'
                 }`}
               >
-                <div className="relative">
-                  <Icon size={22} className={isActive ? 'text-white' : 'text-gray-400 dark:text-gray-500 group-hover:text-primary dark:group-hover:text-white'} />
-                  {hasRequests && (
-                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-ping" />
-                  )}
+                <div className={`p-2 rounded-xl transition-all ${isActive ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-slate-700 text-gray-500 group-hover:text-primary'}`}>
+                  <Icon size={20} />
                 </div>
-                <span className="font-semibold">{item.label}</span>
-                {hasRequests && (
-                  <span className="mr-auto px-2 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white shadow-sm animate-pulse">
-                    {joinRequestsCount}
+                <div className="flex-1 min-w-0">
+                  <span className="font-bold text-sm block leading-tight">{hub.label}</span>
+                  <span className={`text-[10px] block mt-0.5 truncate ${isActive ? 'text-white/80' : 'text-gray-400 dark:text-gray-500'}`}>
+                    {hub.sublabel}
                   </span>
-                )}
-                {isActive && !hasRequests && <div className="mr-auto w-1.5 h-1.5 rounded-full bg-white/50" />}
+                </div>
+                {isActive && <div className="w-2 h-2 rounded-full bg-white" />}
               </button>
             );
           })}
+
+          {/* Admin Management Section (Reps & Owners Only) */}
+          {adminNavItems.length > 0 && (
+            <div className="pt-4 mt-3 border-t border-gray-100 dark:border-slate-700/60 space-y-1">
+              <span className="text-[10px] font-black tracking-wider uppercase text-gray-400 dark:text-gray-500 px-3 block mb-1.5">
+                إدارة الدفعة والطلاب 👑
+              </span>
+              {adminNavItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                const hasBadge = (item.badge || 0) > 0;
+
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => onTabChange(item.id)}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all duration-200 group relative text-right text-xs font-bold cursor-pointer ${
+                      isActive
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-slate-700/50 hover:text-purple-600'
+                    }`}
+                  >
+                    <Icon size={16} />
+                    <span className="flex-1 truncate">{item.label}</span>
+                    {hasBadge && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white animate-pulse">
+                        {item.badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </nav>
 
         {onOpenRepModal && (
@@ -251,32 +330,42 @@ const Layout: React.FC<LayoutProps> = ({
           </div>
         </main>
 
-        {/* Mobile Bottom Navigation */}
-        <nav className="md:hidden absolute bottom-0 w-full bg-white/90 dark:bg-slate-800/90 backdrop-blur-lg border-t border-gray-200 dark:border-slate-700 flex overflow-x-auto no-scrollbar items-center py-2 pb-5 z-30 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] transition-colors duration-300 px-2 gap-1">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            const isRequestsTab = item.id === Tab.REQUESTS;
-            const hasRequests = isRequestsTab && joinRequestsCount > 0;
+        {/* Mobile Bottom Navigation (Thumb-Zone 5 Smart Hubs) */}
+        <nav className="md:hidden absolute bottom-0 w-full bg-white/95 dark:bg-slate-800/95 backdrop-blur-lg border-t border-gray-200 dark:border-slate-700 grid grid-cols-5 items-center py-2 pb-4 z-30 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] transition-colors duration-300 px-1">
+          {coreHubs.map((hub) => {
+            const Icon = hub.icon;
+            const isActive = hub.isActive;
+            const isProfile = hub.id === Tab.PROFILE;
+            const hasRequests = isProfile && isManager && joinRequestsCount > 0;
 
             return (
               <button
-                key={item.id}
-                onClick={() => onTabChange(item.id)}
-                className={`flex flex-col items-center py-1 px-2.5 min-w-[62px] shrink-0 transition-all duration-300 relative ${
-                  isActive ? 'text-primary -translate-y-1' : 'text-gray-400 dark:text-gray-500'
+                key={hub.id}
+                onClick={() => onTabChange(hub.id)}
+                className={`flex flex-col items-center justify-center py-1 transition-all duration-200 relative cursor-pointer ${
+                  isActive ? 'text-primary scale-105' : 'text-gray-400 dark:text-gray-500'
                 }`}
               >
                 <div className={`p-1.5 rounded-xl transition-all relative ${isActive ? 'bg-primary/10' : ''}`}>
-                    <Icon size={22} strokeWidth={isActive ? 2.5 : 2} />
-                    {hasRequests && (
-                      <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full text-[9px] font-black flex items-center justify-center border-2 border-white dark:border-slate-800 animate-pulse">
-                        {joinRequestsCount > 9 ? '+9' : joinRequestsCount}
-                      </span>
-                    )}
+                  <Icon size={21} strokeWidth={isActive ? 2.5 : 2} />
+                  {hasRequests && (
+                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full text-[9px] font-black flex items-center justify-center border-2 border-white dark:border-slate-800 animate-pulse">
+                      {joinRequestsCount > 9 ? '+9' : joinRequestsCount}
+                    </span>
+                  )}
                 </div>
-                <span className={`text-[10px] mt-0.5 font-medium whitespace-nowrap transition-opacity ${isActive ? 'opacity-100 font-bold' : 'opacity-70'}`}>{item.label}</span>
-                {isActive && <span className="absolute bottom-0 w-1 h-1 bg-primary rounded-full"></span>}
+                <span className={`text-[10px] mt-0.5 font-bold whitespace-nowrap transition-opacity ${isActive ? 'opacity-100 font-black' : 'opacity-70'}`}>
+                  {hub.id === Tab.HOME
+                    ? 'الرئيسية'
+                    : hub.id === Tab.STUDY_HUB
+                    ? 'الدراسة'
+                    : hub.id === Tab.ACADEMIC_PATH
+                    ? 'الأكاديمي'
+                    : hub.id === Tab.COMMUNITY_HUB
+                    ? 'الدفعة'
+                    : 'حسابي'}
+                </span>
+                {isActive && <span className="absolute bottom-0 w-1.5 h-1 bg-primary rounded-full"></span>}
               </button>
             );
           })}
