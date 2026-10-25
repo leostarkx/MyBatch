@@ -705,7 +705,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
 
       // 2. Unpack children into standard paragraph(s)
       const frag = document.createDocumentFragment();
-      const childNodes = Array.from(bq.childNodes);
+      const childNodes: Node[] = Array.from(bq.childNodes);
 
       if (childNodes.length === 0 || bq.textContent?.trim() === '') {
         const p = document.createElement('p');
@@ -1055,8 +1055,8 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   };
 
   // Apply font sizes or headings
-  const applyFontSize = (type: 'h1' | 'h2' | 'h3' | 'large' | 'normal' | 'small') => {
-    if (type === 'h1' || type === 'h2' || type === 'h3') {
+  const applyFontSize = (type: 'h1' | 'h2' | 'h3' | 'large' | 'normal' | 'small' | 'blockquote') => {
+    if (type === 'h1' || type === 'h2' || type === 'h3' || type === 'blockquote') {
       convertBlockTo(type);
     } else if (type === 'normal') {
       convertBlockTo('p');
@@ -1563,6 +1563,24 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applyFontSize('blockquote')}
+                    className={`w-full text-right px-2.5 py-1.5 rounded-xl transition text-xs flex items-center justify-between ${
+                      activeFormats.block === 'blockquote'
+                        ? 'bg-primary/15 text-primary font-black'
+                        : 'hover:bg-gray-50 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300 font-normal'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Quote size={13} className="text-primary" />
+                      <span>اقتباس أو نص بارز (Quote)</span>
+                    </div>
+                    {activeFormats.block === 'blockquote' && (
+                      <span className="text-[10px] text-primary font-bold">نشط</span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => applyFontSize('large')}
                     className="w-full text-right px-2.5 py-1.5 rounded-xl hover:bg-gray-50 dark:hover:bg-slate-700 text-xs font-bold transition text-gray-800 dark:text-white"
                   >
@@ -1851,9 +1869,13 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => execCmd('formatBlock', '<blockquote>')}
-              className="p-1.5 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 transition text-primary"
-              title="اقتباس أو نص بارز"
+              onClick={toggleBlockquote}
+              className={`p-1.5 rounded-lg transition ${
+                activeFormats.block === 'blockquote'
+                  ? 'bg-primary text-white shadow-xs'
+                  : 'hover:bg-gray-200 dark:hover:bg-slate-700 text-primary'
+              }`}
+              title="اقتباس أو نص بارز - انقر مجدداً لإلغاء الاقتباس والعودة لنص عادي"
             >
               <Quote size={15} />
             </button>
@@ -2017,6 +2039,22 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 title="عنوان فرعي بارز (H2)"
               >
                 H2
+              </button>
+
+              {/* Quick Quote */}
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={toggleBlockquote}
+                className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition shadow-xs flex items-center gap-1 ${
+                  activeFormats.block === 'blockquote'
+                    ? 'bg-primary text-white'
+                    : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-white hover:bg-primary/20'
+                }`}
+                title="اقتباس / إلغاء الاقتباس"
+              >
+                <Quote size={11} />
+                <span>اقتباس</span>
               </button>
 
               <span className="w-px h-3.5 bg-primary/20 mx-0.5" />

@@ -85,6 +85,22 @@
   font-style: italic;
 }
 
+[dir="ltr"] .wysiwyg-editor blockquote,
+[dir="ltr"] .formatted-html-renderer blockquote,
+.wysiwyg-editor blockquote[dir="ltr"],
+.formatted-html-renderer blockquote[dir="ltr"] {
+  border-right: none;
+  border-left: 4px solid #3b82f6;
+}
+
+.wysiwyg-editor blockquote blockquote,
+.formatted-html-renderer blockquote blockquote {
+  margin: 0.25rem 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
 /* Image blocks & captions */
 .wysiwyg-editor .note-image-block,
 .formatted-html-renderer .note-image-block {

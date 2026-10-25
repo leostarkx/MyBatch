@@ -1000,6 +1000,7 @@ export default function App() {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
   const [isAddingAssignment, setIsAddingAssignment] = useState(false);
+  const [isSavingAssignment, setIsSavingAssignment] = useState(false);
   const [editingAssignment, setEditingAssignment] = useState<Assignment | null>(null);
   const [newAssignTitle, setNewAssignTitle] = useState("");
   const [newAssignCourseId, setNewAssignCourseId] = useState("");
@@ -4144,7 +4145,7 @@ export default function App() {
   const handleOpenAddAssignment = () => {
     setEditingAssignment(null);
     setNewAssignTitle("");
-    setNewAssignCourseId(courses.length > 0 ? courses[0].id : "");
+    setNewAssignCourseId(courses.length > 0 ? courses[0].id : "general");
     setNewAssignDesc("");
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -4161,7 +4162,7 @@ export default function App() {
   const handleOpenEditAssignment = (assign: Assignment) => {
     setEditingAssignment(assign);
     setNewAssignTitle(assign.title);
-    setNewAssignCourseId(assign.courseId);
+    setNewAssignCourseId(assign.courseId || "general");
     setNewAssignDesc(assign.description || "");
     setNewAssignDueDate(assign.dueDate);
     setNewAssignNotify(false);
@@ -4176,12 +4177,14 @@ export default function App() {
   };
 
   const handleSaveAssignment = async () => {
-    if (!newAssignTitle.trim() || !newAssignCourseId || !newAssignDueDate || !effectiveBatchCode) {
+    if (!newAssignTitle.trim() || !newAssignCourseId || !newAssignDueDate) {
       alert("يرجى إدخال عنوان الواجب، اختيار المادة، وتحديد موعد التسليم");
       return;
     }
 
+    const batchCodeToUse = effectiveBatchCode || currentUser?.batchCode || "ENG26";
     const selectedCourse = courses.find((c) => c.id === newAssignCourseId);
+    const courseName = selectedCourse?.name || (newAssignCourseId === "general" ? "تكليف عام" : "مادة دراسية");
     const dueTimestamp = new Date(newAssignDueDate).getTime();
 
     const attachmentsList: AssignmentAttachment[] = [];
@@ -4195,10 +4198,10 @@ export default function App() {
 
     const assignment: Assignment = {
       id: editingAssignment ? editingAssignment.id : `assign_${Date.now()}`,
-      batchCode: effectiveBatchCode,
+      batchCode: batchCodeToUse,
       title: newAssignTitle.trim(),
       courseId: newAssignCourseId,
-      courseName: selectedCourse?.name || "مادة غير محددة",
+      courseName,
       dueDate: newAssignDueDate,
       dueTimestamp,
       completedBy: editingAssignment ? editingAssignment.completedBy || [] : [],
@@ -4208,31 +4211,11 @@ export default function App() {
       ...(attachmentsList.length > 0 ? { attachments: attachmentsList } : {}),
     };
 
-    await saveAssignmentToFirestore(assignment);
+    setIsSavingAssignment(true);
+    try {
+      await saveAssignmentToFirestore(assignment);
 
-    const formattedDueShort = new Date(dueTimestamp).toLocaleString("ar-EG", {
-      weekday: "long",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    if (!editingAssignment) {
-      await broadcastBatchNotification({
-        allUsers: appUsers,
-        batchCode: effectiveBatchCode,
-        excludeUid: currentUser?.uid,
-        category: "ASSIGNMENT",
-        title: `📝 واجب جديد في ${assignment.courseName}: ${assignment.title}`,
-        content: `آخر موعد للتسليم: ${formattedDueShort}.`,
-        targetTab: Tab.ASSIGNMENTS,
-      });
-    }
-
-    // If notification toggle was checked, automatically post to Announcements
-    if (newAssignNotify && !editingAssignment && currentUser) {
-      const formattedDue = new Date(dueTimestamp).toLocaleString("ar-EG", {
+      const formattedDueShort = new Date(dueTimestamp).toLocaleString("ar-EG", {
         weekday: "long",
         month: "short",
         day: "numeric",
@@ -4240,29 +4223,57 @@ export default function App() {
         minute: "2-digit",
       });
 
-      const annContent = `تمت إضافة تكليف / واجب جديد لمادة ${selectedCourse?.name || ""}.\n\n📅 موعد التسليم النهائي: ${formattedDue}\n\n${newAssignDesc.trim()}`;
+      if (!editingAssignment) {
+        await broadcastBatchNotification({
+          allUsers: appUsers,
+          batchCode: batchCodeToUse,
+          excludeUid: currentUser?.uid,
+          category: "ASSIGNMENT",
+          title: `📝 واجب جديد في ${assignment.courseName}: ${assignment.title}`,
+          content: `آخر موعد للتسليم: ${formattedDueShort}.`,
+          targetTab: Tab.ASSIGNMENTS,
+        });
+      }
 
-      const ann: Announcement = {
-        id: `ann_${Date.now()}`,
-        batchCode: effectiveBatchCode,
-        title: `📝 واجب جديد: ${newAssignTitle.trim()}`,
-        content: annContent,
-        timestamp: Date.now(),
-        authorId: currentUser.uid,
-        authorName: currentUser.name,
-        priority: "high",
-        courseId: newAssignCourseId,
-        courseName: selectedCourse?.name,
-        ...(newAssignAttachmentUrl.trim()
-          ? { mediaUrl: newAssignAttachmentUrl.trim(), mediaType: newAssignAttachmentType }
-          : {}),
-        attachments: [],
-      };
-      await saveAnnouncementToFirestore(ann);
+      // If notification toggle was checked, automatically post to Announcements
+      if (newAssignNotify && !editingAssignment && currentUser) {
+        const formattedDue = new Date(dueTimestamp).toLocaleString("ar-EG", {
+          weekday: "long",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+
+        const annContent = `تمت إضافة تكليف / واجب جديد لمادة ${courseName}.\n\n📅 موعد التسليم النهائي: ${formattedDue}\n\n${newAssignDesc.trim()}`;
+
+        const ann: Announcement = {
+          id: `ann_${Date.now()}`,
+          batchCode: batchCodeToUse,
+          title: `📝 واجب جديد: ${newAssignTitle.trim()}`,
+          content: annContent,
+          timestamp: Date.now(),
+          authorId: currentUser.uid,
+          authorName: currentUser.name,
+          priority: "high",
+          courseId: newAssignCourseId,
+          courseName,
+          ...(newAssignAttachmentUrl.trim()
+            ? { mediaUrl: newAssignAttachmentUrl.trim(), mediaType: newAssignAttachmentType }
+            : {}),
+          attachments: [],
+        };
+        await saveAnnouncementToFirestore(ann);
+      }
+
+      setIsAddingAssignment(false);
+      setEditingAssignment(null);
+    } catch (err) {
+      console.error("Error saving assignment:", err);
+      alert("حدث خطأ أثناء حفظ الواجب الدراسي، يرجى المحاولة مجدداً.");
+    } finally {
+      setIsSavingAssignment(false);
     }
-
-    setIsAddingAssignment(false);
-    setEditingAssignment(null);
   };
 
   const handleDeleteAssignment = async (id: string) => {
@@ -4439,18 +4450,20 @@ export default function App() {
               )}
             </div>
             <div className="flex items-center gap-2">
-              {isManager && (
+              {(isManager || canManageAssignments) && (
                 <button
+                  type="button"
                   onClick={handleOpenAddAssignment}
-                  className="bg-primary/10 hover:bg-primary/20 text-primary px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1"
+                  className="bg-primary/10 hover:bg-primary/20 text-primary px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 active:scale-95 cursor-pointer shadow-xs"
                 >
                   <Plus size={16} />
                   إضافة واجب
                 </button>
               )}
               <button
+                type="button"
                 onClick={() => setActiveTab(Tab.ASSIGNMENTS)}
-                className="text-primary hover:underline text-xs font-bold flex items-center gap-1"
+                className="text-primary hover:underline text-xs font-bold flex items-center gap-1 cursor-pointer"
               >
                 عرض كل الواجبات ({assignments.length}) ➔
               </button>
@@ -4458,8 +4471,18 @@ export default function App() {
           </div>
 
           {assignments.length === 0 ? (
-            <div className="p-5 bg-white dark:bg-slate-800 rounded-2xl border border-gray-100 dark:border-slate-700 text-center text-gray-400 text-xs">
-              لا توجد واجبات دراسية مضافة حالياً.
+            <div className="p-6 bg-white dark:bg-slate-800 rounded-2xl border border-gray-100 dark:border-slate-700 text-center text-gray-400 text-xs flex flex-col items-center justify-center gap-2.5">
+              <span>لا توجد واجبات دراسية مضافة حالياً.</span>
+              {(isManager || canManageAssignments) && (
+                <button
+                  type="button"
+                  onClick={handleOpenAddAssignment}
+                  className="bg-primary text-white hover:bg-primary/90 px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
+                >
+                  <Plus size={14} />
+                  إضافة أول واجب
+                </button>
+              )}
             </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -12577,191 +12600,6 @@ export default function App() {
           )}
         </div>
 
-        {/* Modal: Add/Edit Assignment */}
-        {isAddingAssignment && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-            <div className="bg-white dark:bg-slate-800 w-full max-w-lg rounded-3xl shadow-2xl p-6 animate-in zoom-in-95 border border-gray-100 dark:border-slate-700">
-              <div className="flex justify-between items-center mb-6 pb-3 border-b border-gray-100 dark:border-slate-700">
-                <div className="flex items-center gap-2">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center">
-                    <CheckSquare size={22} />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-lg text-gray-800 dark:text-white">
-                      {editingAssignment ? "تعديل بيانات الواجب" : "إضافة تكليف / واجب دراسي جديد"}
-                    </h3>
-                    <p className="text-xs text-gray-400">
-                      حدد المادة وتاريخ ووقت التسليم لحساب الوقت المتبقي تلقائياً
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setIsAddingAssignment(false)}
-                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-2 rounded-xl"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
-                    عنوان الواجب <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={newAssignTitle}
-                    onChange={(e) => setNewAssignTitle(e.target.value)}
-                    placeholder="مثال: حل الشيت الثاني - تصميم قواعد البيانات"
-                    className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 transition"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
-                      المادة الدراسية <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      value={newAssignCourseId}
-                      onChange={(e) => setNewAssignCourseId(e.target.value)}
-                      className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 transition cursor-pointer"
-                    >
-                      <option value="">اختر المادة...</option>
-                      {courses.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
-                      موعد التسليم الدقيق <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="datetime-local"
-                      value={newAssignDueDate}
-                      onChange={(e) => setNewAssignDueDate(e.target.value)}
-                      className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 transition"
-                    />
-                  </div>
-                </div>
-
-                <RichTextEditor
-                  value={newAssignDesc}
-                  onChange={setNewAssignDesc}
-                  placeholder="اكتب تعليمات الأستاذ، طريقة التسليم، النقاط المهمة، ولون التنبيهات مثل التلي (عريض، مائل، سبويلر) ✍️"
-                  label="تفاصيل ومتطلبات الواجب بالتنسيق الغني (اختياري)"
-                  minHeight="min-h-[140px]"
-                />
-
-                <div>
-                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
-                    مرفق الواجب (ملف أو صورة من الجهاز أو رابط)
-                  </label>
-                  <div className="flex flex-col gap-2">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="file"
-                        ref={assignFileInputRef}
-                        onChange={handleAssignFilePick}
-                        accept=".pdf,.doc,.docx,.ppt,.pptx,image/*"
-                        hidden
-                      />
-                      <button
-                        type="button"
-                        onClick={() => assignFileInputRef.current?.click()}
-                        disabled={isUploadingAssignFile}
-                        className="bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0"
-                      >
-                        {isUploadingAssignFile ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-                        اختر ملف من جهازك
-                      </button>
-
-                      <input
-                        type="text"
-                        value={newAssignAttachmentUrl.startsWith("data:") ? "(تم اختيار ملف من جهازك ✅)" : newAssignAttachmentUrl}
-                        onChange={(e) => setNewAssignAttachmentUrl(e.target.value)}
-                        disabled={newAssignAttachmentUrl.startsWith("data:")}
-                        placeholder="أو اكتب رابط خارجي..."
-                        className="flex-1 bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2.5 text-xs outline-none focus:ring-2 focus:ring-primary/20 transition"
-                      />
-
-                      <select
-                        value={newAssignAttachmentType}
-                        onChange={(e) => setNewAssignAttachmentType(e.target.value as any)}
-                        disabled={newAssignAttachmentUrl.startsWith("data:")}
-                        className="bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-2.5 py-2.5 text-xs outline-none cursor-pointer"
-                      >
-                        <option value="link">رابط</option>
-                        <option value="file">ملف</option>
-                        <option value="image">صورة</option>
-                      </select>
-                    </div>
-
-                    {newAssignAttachmentUrl && newAssignAttachmentUrl.startsWith("data:") && (
-                      <div className="flex items-center justify-between text-[11px] text-emerald-600 dark:text-emerald-400 font-bold px-1">
-                        <span>تم تجهيز الملف المرفق من الجهاز للرفع مع الواجب ({newAssignAttachmentType})</span>
-                        <button
-                          type="button"
-                          onClick={() => setNewAssignAttachmentUrl("")}
-                          className="text-red-500 hover:underline"
-                        >
-                          إلغاء المرفق
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Announcement & Notification toggle */}
-                {!editingAssignment && (
-                  <div
-                    className="p-3.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-2xl flex items-center justify-between cursor-pointer select-none"
-                    onClick={() => setNewAssignNotify(!newAssignNotify)}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Bell size={18} className="text-amber-600 dark:text-amber-400 shrink-0" />
-                      <div>
-                        <p className="text-xs font-bold text-amber-900 dark:text-amber-200">
-                          نشر التكليف في التبليغات وإرسال إشعار للدفعة 📢
-                        </p>
-                        <p className="text-[10px] text-amber-700/80 dark:text-amber-400">
-                          سيتم إنشاء تبليغ فوري يحتوي على المادة وموعد التسليم
-                        </p>
-                      </div>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={newAssignNotify}
-                      onChange={(e) => setNewAssignNotify(e.target.checked)}
-                      className="w-4 h-4 rounded text-primary accent-primary cursor-pointer shrink-0"
-                    />
-                  </div>
-                )}
-
-                <div className="flex gap-3 pt-4 border-t border-gray-100 dark:border-slate-700">
-                  <button
-                    onClick={() => setIsAddingAssignment(false)}
-                    className="flex-1 bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 py-3 rounded-2xl font-bold text-sm hover:bg-gray-200 transition"
-                  >
-                    إلغاء
-                  </button>
-                  <button
-                    onClick={handleSaveAssignment}
-                    disabled={!newAssignTitle.trim() || !newAssignCourseId || !newAssignDueDate}
-                    className="flex-1 bg-primary text-white py-3 rounded-2xl font-bold text-sm shadow-lg shadow-primary/30 flex items-center justify-center gap-2 disabled:opacity-50 transition active:scale-95"
-                  >
-                    <Save size={18} />
-                    {editingAssignment ? "حفظ التعديلات" : "حفظ ونشر الواجب"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   };
@@ -15489,6 +15327,215 @@ export default function App() {
                 className="px-6 py-2.5 bg-primary text-white rounded-xl text-xs font-bold shadow-md shadow-primary/20 hover:bg-primary/90 transition active:scale-95"
               >
                 إتمام وإنهاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Global Add/Edit Assignment */}
+      {isAddingAssignment && (
+        <div
+          onClick={() => setIsAddingAssignment(false)}
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-800 w-full max-w-lg rounded-3xl shadow-2xl p-6 border border-gray-100 dark:border-slate-700 max-h-[92vh] flex flex-col my-auto animate-in zoom-in-95 duration-200"
+          >
+            {/* Modal Header */}
+            <div className="flex justify-between items-center pb-4 border-b border-gray-100 dark:border-slate-700 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center font-bold">
+                  <CheckSquare size={22} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-gray-800 dark:text-white">
+                    {editingAssignment ? "تعديل بيانات الواجب الدراسي" : "إضافة تكليف / واجب دراسي جديد"}
+                  </h3>
+                  <p className="text-xs text-gray-400">
+                    حدد المادة وتاريخ ووقت التسليم لحساب الوقت المتبقي تلقائياً وتنبيه الدفعة
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddingAssignment(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-2 rounded-xl"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="space-y-4 pt-4 overflow-y-auto flex-1 no-scrollbar text-xs">
+              <div>
+                <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                  عنوان الواجب <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newAssignTitle}
+                  onChange={(e) => setNewAssignTitle(e.target.value)}
+                  placeholder="مثال: حل الشيت الثاني - تصميم قواعد البيانات"
+                  className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 transition"
+                  autoFocus
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                    المادة الدراسية <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={newAssignCourseId}
+                    onChange={(e) => setNewAssignCourseId(e.target.value)}
+                    className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 transition cursor-pointer"
+                  >
+                    <option value="">-- اختر المادة --</option>
+                    {courses.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                    <option value="general">واجب عام / تكليف مشترك</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                    موعد التسليم الدقيق <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={newAssignDueDate}
+                    onChange={(e) => setNewAssignDueDate(e.target.value)}
+                    className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 transition"
+                  />
+                </div>
+              </div>
+
+              <RichTextEditor
+                value={newAssignDesc}
+                onChange={setNewAssignDesc}
+                placeholder="اكتب تعليمات الأستاذ، طريقة التسليم، النقاط المهمة، وروابط المساعدة ✍️"
+                label="تفاصيل ومتطلبات الواجب بالتنسيق الغني (اختياري)"
+                minHeight="min-h-[130px]"
+              />
+
+              <div>
+                <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                  مرفق الواجب (ملف أو صورة من الجهاز أو رابط)
+                </label>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="file"
+                      ref={assignFileInputRef}
+                      onChange={handleAssignFilePick}
+                      accept=".pdf,.doc,.docx,.ppt,.pptx,image/*"
+                      hidden
+                    />
+                    <button
+                      type="button"
+                      onClick={() => assignFileInputRef.current?.click()}
+                      disabled={isUploadingAssignFile}
+                      className="bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer"
+                    >
+                      {isUploadingAssignFile ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+                      اختر ملف من جهازك
+                    </button>
+
+                    <input
+                      type="text"
+                      value={newAssignAttachmentUrl.startsWith("data:") ? "(تم اختيار ملف من جهازك ✅)" : newAssignAttachmentUrl}
+                      onChange={(e) => setNewAssignAttachmentUrl(e.target.value)}
+                      disabled={newAssignAttachmentUrl.startsWith("data:")}
+                      placeholder="أو اكتب رابط خارجي..."
+                      className="flex-1 bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2.5 text-xs outline-none focus:ring-2 focus:ring-primary/20 transition"
+                    />
+
+                    <select
+                      value={newAssignAttachmentType}
+                      onChange={(e) => setNewAssignAttachmentType(e.target.value as any)}
+                      disabled={newAssignAttachmentUrl.startsWith("data:")}
+                      className="bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-2.5 py-2.5 text-xs outline-none cursor-pointer"
+                    >
+                      <option value="link">رابط</option>
+                      <option value="file">ملف</option>
+                      <option value="image">صورة</option>
+                    </select>
+                  </div>
+
+                  {newAssignAttachmentUrl && newAssignAttachmentUrl.startsWith("data:") && (
+                    <div className="flex items-center justify-between text-[11px] text-emerald-600 dark:text-emerald-400 font-bold px-1">
+                      <span>تم تجهيز الملف المرفق من الجهاز للرفع مع الواجب ({newAssignAttachmentType})</span>
+                      <button
+                        type="button"
+                        onClick={() => setNewAssignAttachmentUrl("")}
+                        className="text-red-500 hover:underline cursor-pointer"
+                      >
+                        إلغاء المرفق
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Announcement & Notification toggle */}
+              {!editingAssignment && (
+                <div
+                  className="p-3.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-2xl flex items-center justify-between cursor-pointer select-none"
+                  onClick={() => setNewAssignNotify(!newAssignNotify)}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Bell size={18} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                        نشر التكليف في التبليغات وإرسال إشعار للدفعة 📢
+                      </p>
+                      <p className="text-[10px] text-amber-700/80 dark:text-amber-400">
+                        سيتم إنشاء تبليغ فوري يحتوي على المادة وموعد التسليم
+                      </p>
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={newAssignNotify}
+                    onChange={(e) => setNewAssignNotify(e.target.checked)}
+                    className="w-4 h-4 rounded text-primary accent-primary cursor-pointer shrink-0"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex gap-3 pt-4 border-t border-gray-100 dark:border-slate-700 shrink-0 mt-2">
+              <button
+                type="button"
+                onClick={() => setIsAddingAssignment(false)}
+                className="flex-1 bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 py-3 rounded-2xl font-bold text-xs hover:bg-gray-200 transition cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveAssignment}
+                disabled={!newAssignTitle.trim() || !newAssignCourseId || !newAssignDueDate || isSavingAssignment}
+                className="flex-1 bg-primary text-white py-3 rounded-2xl font-bold text-xs shadow-lg shadow-primary/30 flex items-center justify-center gap-2 disabled:opacity-50 transition active:scale-95 cursor-pointer"
+              >
+                {isSavingAssignment ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>جاري الحفظ والنشر...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save size={16} />
+                    <span>{editingAssignment ? "حفظ التعديلات" : "حفظ ونشر الواجب للدفعة 🚀"}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
