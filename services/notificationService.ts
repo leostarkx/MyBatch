@@ -7,7 +7,8 @@ import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   Tab,
 } from '../types';
-import { saveNotificationToFirestore } from './firebase';
+import { doc, writeBatch } from 'firebase/firestore';
+import { db, saveNotificationToFirestore, sanitizeForFirestore } from './firebase';
 
 /**
  * Safely returns a user's resolved NotificationPreferences, merging defaults
@@ -244,22 +245,25 @@ export async function broadcastBatchNotification(params: {
     return isCategoryEnabledForUser(u, category);
   });
 
-  await Promise.all(
-    recipients.map((student) => {
-      const notif: Notification = {
-        id: `notif_${Date.now()}_${student.uid.slice(0, 6)}_${Math.random().toString(36).slice(2, 5)}`,
-        userId: student.uid,
-        batchCode: cleanCode,
-        type: category,
-        title,
-        content,
-        isRead: false,
-        timestamp: Date.now(),
-        targetTab,
-      };
-      return saveNotificationToFirestore(notif);
-    })
-  );
+  if (recipients.length === 0) return;
+
+  const batch = writeBatch(db);
+  for (const student of recipients) {
+    const notif: Notification = {
+      id: `notif_${Date.now()}_${student.uid.slice(0, 6)}_${Math.random().toString(36).slice(2, 5)}`,
+      userId: student.uid,
+      batchCode: cleanCode,
+      type: category,
+      title,
+      content,
+      isRead: false,
+      timestamp: Date.now(),
+      targetTab,
+    };
+    const sanitized = sanitizeForFirestore(notif);
+    batch.set(doc(db, 'notifications', notif.id), sanitized);
+  }
+  await batch.commit();
 }
 
 /**

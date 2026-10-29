@@ -11,7 +11,8 @@ import {
 } from 'firebase/auth';
 import { 
   initializeFirestore, getFirestore, doc, getDocFromServer, getDocs, getDoc, setDoc, 
-  deleteDoc, collection, onSnapshot, query, orderBy, where, writeBatch, setLogLevel
+  deleteDoc, collection, onSnapshot, query, orderBy, where, writeBatch, setLogLevel,
+  persistentLocalCache, persistentMultipleTabManager, limit, limitToLast
 } from 'firebase/firestore';
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
@@ -27,25 +28,28 @@ import {
   MOCK_USERS, MOCK_BATCHES
 } from './mockDb';
 
-// Suppress noisy internal WebChannel timeout logs when operating over long-polling / offline cache
+// Suppress noisy internal WebChannel timeout logs
 try {
   setLogLevel('silent');
 } catch {
   // Ignore if setLogLevel is unavailable
 }
 
-// Initialize Firebase App
+// Initialize Firebase App with multi-tab persistent IndexedDB cache
 export const app = initializeApp(firebaseConfig);
 export const db = (() => {
   try {
     return initializeFirestore(
       app,
       {
-        experimentalForceLongPolling: true,
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+        }),
       },
       (firebaseConfig as any).firestoreDatabaseId
     );
-  } catch {
+  } catch (err) {
+    console.warn('IndexedDB persistent cache init fallback:', err);
     return getFirestore(app, (firebaseConfig as any).firestoreDatabaseId);
   }
 })();
@@ -134,29 +138,25 @@ export async function seedInitialDataIfEmpty() {
         bio: 'مطور النظام ومؤسس منصة دفعتي',
         signatureColor: '#2563eb'
       });
-    } else {
-      // Keep credentials intact
-      await setDoc(ownerRef, { 
-        username: 'ahmed',
-        password: 'ahmed0828', 
-        role: UserRole.OWNER, 
-        name: 'أحمد (المطور)' 
-      }, { merge: true });
     }
 
-    // Auto-purge any system/mock announcements that were not explicitly added by the user
-    const annSnap = await getDocs(collection(db, 'announcements'));
-    for (const d of annSnap.docs) {
-      const data = d.data();
-      if (
-        d.id.startsWith('ann_rep_') ||
-        d.id.startsWith('mock_') ||
-        data.authorId === 'system_ahmed' ||
-        data.authorId === 'rep_1' ||
-        (typeof data.title === 'string' && data.title.includes('تعيين ممثل جديد للدفعة'))
-      ) {
-        await deleteDoc(d.ref);
+    // Only run mock announcement cleanup once per client instead of every reload
+    const hasCleanedAnnouncements = localStorage.getItem('dafaaty_ann_cleaned_v2');
+    if (!hasCleanedAnnouncements) {
+      const annSnap = await getDocs(collection(db, 'announcements'));
+      for (const d of annSnap.docs) {
+        const data = d.data();
+        if (
+          d.id.startsWith('ann_rep_') ||
+          d.id.startsWith('mock_') ||
+          data.authorId === 'system_ahmed' ||
+          data.authorId === 'rep_1' ||
+          (typeof data.title === 'string' && data.title.includes('تعيين ممثل جديد للدفعة'))
+        ) {
+          await deleteDoc(d.ref);
+        }
       }
+      localStorage.setItem('dafaaty_ann_cleaned_v2', 'true');
     }
   } catch (error: any) {
     const msg = error?.message || String(error);
@@ -314,7 +314,12 @@ export function subscribeChatMessages(batchCode: string, callback: (items: ChatM
     callback([]);
     return () => {};
   }
-  const q = query(collection(db, 'chat_messages'), where('batchCode', '==', batchCode), orderBy('timestamp', 'asc'));
+  const q = query(
+    collection(db, 'chat_messages'),
+    where('batchCode', '==', batchCode),
+    orderBy('timestamp', 'asc'),
+    limitToLast(100)
+  );
   return onSnapshot(q, (snapshot) => {
     const list = snapshot.docs.map(doc => doc.data() as ChatMessage);
     callback(list);
@@ -468,6 +473,15 @@ export async function saveAttendanceRecordToFirestore(item: AttendanceRecord) {
   const sanitized = sanitizeForFirestore(item);
   await setDoc(doc(db, 'attendance_records', item.id), sanitized);
 }
+export async function saveAttendanceRecordsBatchToFirestore(items: AttendanceRecord[]) {
+  if (!items || items.length === 0) return;
+  const batch = writeBatch(db);
+  for (const item of items) {
+    const sanitized = sanitizeForFirestore(item);
+    batch.set(doc(db, 'attendance_records', item.id), sanitized);
+  }
+  await batch.commit();
+}
 export async function deleteAttendanceRecordFromFirestore(id: string) {
   await deleteDoc(doc(db, 'attendance_records', id));
 }
@@ -547,10 +561,12 @@ export async function deleteUserFromFirestore(uid: string) {
 // Settings
 export function subscribeSettings(callback: (settings: Record<string, any>) => void) {
   return onSnapshot(
-    collection(db, 'settings'),
-    (snapshot) => {
+    doc(db, 'settings', 'chat_settings'),
+    (docSnap) => {
       const res: Record<string, any> = {};
-      snapshot.docs.forEach(d => { res[d.id] = d.data(); });
+      if (docSnap.exists()) {
+        res['chat_settings'] = docSnap.data();
+      }
       callback(res);
     },
     () => {}
@@ -563,7 +579,11 @@ export async function saveSettingToFirestore(key: string, data: any) {
 
 // Notifications
 export function subscribeNotifications(userId: string, callback: (items: Notification[]) => void) {
-  const q = query(collection(db, 'notifications'), where('userId', '==', userId));
+  const q = query(
+    collection(db, 'notifications'),
+    where('userId', '==', userId),
+    limit(50)
+  );
   return onSnapshot(
     q,
     (snapshot) => {

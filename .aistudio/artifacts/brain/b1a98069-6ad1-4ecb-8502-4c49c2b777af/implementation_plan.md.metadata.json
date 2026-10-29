@@ -1,6 +1,6 @@
 {
-  "summary": "خطة العمل الهندسية الشاملة لتطوير منصة «دفعتي»:\n1. المحور الأول: إعادة هيكلة التبويبات والملاحة إلى 4 محاور تشغيلية ذكية (الرئيسية، المركز الدراسي، المسار الأكاديمي، مجتمع الدفعة، حسابي).\n2. المحور الثاني: تجزئة ملف App.tsx المعماري إلى شاشات معيارية مستقلة في مجلد views/ لتحسين الصيانة والاستقرار.\n3. المحور الثالث: تحسين واجهات الهواتف الذكية (Mobile-First) بتحويل الجداول المعقدة إلى كروت أكورديون تفاعلية وتثبيت شريط سفلي ذكي ومريح للملاحة.",
-  "updatedAt": "2026-10-17T09:14:58.868396643Z",
-  "requestFeedback": true,
-  "userFacing": true
+  "summary":  "Comprehensive architectural plan to migrate from Firebase Firestore to Cloud SQL PostgreSQL with automated zero-data-loss data migration, Drizzle ORM, Express server, and complete schema mapping.",
+  "updatedAt":  "2026-10-29T04:43:27.590421457Z",
+  "requestFeedback":  true,
+  "userFacing":  true
 }

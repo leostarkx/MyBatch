@@ -199,6 +199,7 @@ import {
   deleteAttendanceSessionFromFirestore,
   subscribeAttendanceRecords,
   saveAttendanceRecordToFirestore,
+  saveAttendanceRecordsBatchToFirestore,
   deleteAttendanceRecordFromFirestore,
   subscribeChatMessages,
   saveChatMessageToFirestore,
@@ -1034,7 +1035,19 @@ export default function App() {
       if (storedUid) {
         const found = users.find((u) => u.uid === storedUid);
         if (found) {
-          setCurrentUser(found);
+          setCurrentUser((prev) => {
+            if (
+              prev &&
+              prev.uid === found.uid &&
+              prev.role === found.role &&
+              prev.batchCode === found.batchCode &&
+              prev.name === found.name &&
+              prev.avatar === found.avatar
+            ) {
+              return prev;
+            }
+            return found;
+          });
         }
       }
       setLoadingApp(false);
@@ -1042,10 +1055,6 @@ export default function App() {
 
     const unsubBatches = subscribeBatches((items) => {
       setBatches(items);
-    });
-
-    const unsubRepCodes = subscribeRepresentativeCodes((codes) => {
-      setRepresentativeCodes(codes);
     });
 
     const unsubSettings = subscribeSettings((settings) => {
@@ -1065,10 +1074,21 @@ export default function App() {
     return () => {
       unsubUsers();
       unsubBatches();
-      unsubRepCodes();
       unsubSettings();
     };
   }, []);
+
+  // Only the Owner needs to listen to secret representative appointment codes
+  useEffect(() => {
+    if (currentUser?.role !== UserRole.OWNER) {
+      setRepresentativeCodes([]);
+      return;
+    }
+    const unsub = subscribeRepresentativeCodes((codes) => {
+      setRepresentativeCodes(codes);
+    });
+    return () => unsub();
+  }, [currentUser?.role]);
 
   useEffect(() => {
     if (!effectiveBatchCode) {
@@ -1235,7 +1255,7 @@ export default function App() {
       isOwner
     );
     return () => unsubReqs();
-  }, [currentUser, effectiveBatchCode]);
+  }, [currentUser?.uid, currentUser?.role, currentUser?.batchCode, effectiveBatchCode]);
 
   // Update CSS Variables when theme changes
   useEffect(() => {
@@ -3022,7 +3042,7 @@ export default function App() {
           .map((u) => u.uid)
       );
 
-      const promises = sourceRecords
+      const recordsToCopy = sourceRecords
         .filter((srcRec) => validStudentIds.has(srcRec.studentId))
         .map((srcRec) => {
           const existingRecord = attendanceRecords.find(
@@ -3030,7 +3050,7 @@ export default function App() {
               r.sessionId === destSessionId &&
               r.studentId === srcRec.studentId
           );
-          const recData: AttendanceRecord = {
+          return {
             id: existingRecord
               ? existingRecord.id
               : `rec_${Date.now()}_${srcRec.studentId}`,
@@ -3039,13 +3059,12 @@ export default function App() {
             studentId: srcRec.studentId,
             status: srcRec.status,
             timestamp: Date.now(),
-          };
-          return saveAttendanceRecordToFirestore(recData);
+          } as AttendanceRecord;
         });
 
-      await Promise.all(promises);
+      await saveAttendanceRecordsBatchToFirestore(recordsToCopy);
       setCopyAttendanceSuccess(
-        `تم نسخ نفس الحضور والغيابات (${promises.length} طالب) من "${sourceSession?.title || "المحاضرة السابقة"}" ${sourceCourse ? `(${sourceCourse.name})` : ""} بنجاح! ⚡`
+        `تم نسخ نفس الحضور والغيابات (${recordsToCopy.length} طالب) من "${sourceSession?.title || "المحاضرة السابقة"}" ${sourceCourse ? `(${sourceCourse.name})` : ""} بنجاح! ⚡`
       );
       setTimeout(() => setCopyAttendanceSuccess(null), 5000);
     } catch (err) {
@@ -3543,31 +3562,41 @@ export default function App() {
     const statusAr =
       status === "PRESENT" ? "حاضر ✅" : status === "EXCUSED" ? "مجاز 📝" : "غائب ❌";
 
+    const bulkRecords: AttendanceRecord[] = [];
+    const changedStudents: User[] = [];
+
+    targetStudents.forEach((student) => {
+      const existingRecord = attendanceRecords.find(
+        (r) => r.sessionId === selectedSessionId && r.studentId === student.uid,
+      );
+      const recData: AttendanceRecord = {
+        id: existingRecord ? existingRecord.id : `rec_${Date.now()}_${student.uid}`,
+        batchCode: effectiveBatchCode,
+        sessionId: selectedSessionId,
+        studentId: student.uid,
+        status,
+        timestamp: Date.now(),
+      };
+      bulkRecords.push(recData);
+      if (!existingRecord || existingRecord.status !== status) {
+        changedStudents.push(student);
+      }
+    });
+
+    await saveAttendanceRecordsBatchToFirestore(bulkRecords);
+
+    // Notify changed students
     await Promise.all(
-      targetStudents.map(async (student) => {
-        const existingRecord = attendanceRecords.find(
-          (r) => r.sessionId === selectedSessionId && r.studentId === student.uid,
-        );
-        const recData: AttendanceRecord = {
-          id: existingRecord ? existingRecord.id : `rec_${Date.now()}_${student.uid}`,
+      changedStudents.map((student) =>
+        notifyUserIfAllowed({
+          targetUser: student,
+          category: "ATTENDANCE",
+          title: `✅ تسجيل حضورك في ${courseObj?.name || "المحاضرة"}`,
+          content: `تم تسجيل حالتك (${statusAr}) في ${sessObj?.title || "المحاضرة"} بتاريخ ${sessObj?.date || ""}.`,
           batchCode: effectiveBatchCode,
-          sessionId: selectedSessionId,
-          studentId: student.uid,
-          status,
-          timestamp: Date.now(),
-        };
-        await saveAttendanceRecordToFirestore(recData);
-        if (!existingRecord || existingRecord.status !== status) {
-          await notifyUserIfAllowed({
-            targetUser: student,
-            category: "ATTENDANCE",
-            title: `✅ تسجيل حضورك في ${courseObj?.name || "المحاضرة"}`,
-            content: `تم تسجيل حالتك (${statusAr}) في ${sessObj?.title || "المحاضرة"} بتاريخ ${sessObj?.date || ""}.`,
-            batchCode: effectiveBatchCode,
-            targetTab: Tab.ATTENDANCE,
-          });
-        }
-      })
+          targetTab: Tab.ATTENDANCE,
+        })
+      )
     );
   };
 
