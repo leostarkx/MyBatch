@@ -63,6 +63,8 @@ import {
   deleteBatchSuggestionSupabase,
   saveNotificationSupabase,
   deleteNotificationSupabase,
+  getNotificationsSupabase,
+  markNotificationReadSupabase,
   saveJoinRequestSupabase,
   deleteJoinRequestSupabase,
   saveSettingSupabase,
@@ -874,6 +876,13 @@ export async function saveSettingToFirestore(key: string, data: any) {
 
 // Notifications
 export function subscribeNotifications(userId: string, callback: (items: Notification[]) => void) {
+  // Immediately provide cached / Supabase notifications so student/user sees alerts right away
+  getNotificationsSupabase(userId)
+    .then((items) => {
+      if (items && items.length > 0) callback(items);
+    })
+    .catch(() => {});
+
   const q = query(
     collection(db, 'notifications'),
     where('userId', '==', userId),
@@ -882,15 +891,23 @@ export function subscribeNotifications(userId: string, callback: (items: Notific
   return onSnapshot(
     q,
     (snapshot) => {
-      const list = snapshot.docs.map(doc => doc.data() as Notification);
+      const list = snapshot.docs.map((doc) => doc.data() as Notification);
       list.sort((a, b) => b.timestamp - a.timestamp);
       callback(list);
     },
-    () => {}
+    (err) => {
+      if (isQuotaError(err)) {
+        notifyQuotaExceeded();
+        console.warn('Firestore quota exceeded on notifications; falling back to Supabase/local.');
+        getNotificationsSupabase(userId).then(callback).catch(() => {});
+        return;
+      }
+      console.warn('subscribeNotifications error:', err);
+    }
   );
 }
 export async function saveNotificationToFirestore(notif: Notification) {
-  saveNotificationSupabase(notif).catch((e) => console.warn('Supabase saveNotification error:', e));
+  saveNotificationSupabase(notif).catch(() => {});
   try {
     const sanitized = sanitizeForFirestore(notif);
     await setDoc(doc(db, 'notifications', notif.id), sanitized);
@@ -899,6 +916,7 @@ export async function saveNotificationToFirestore(notif: Notification) {
   }
 }
 export async function markNotificationAsReadInFirestore(id: string) {
+  markNotificationReadSupabase(id).catch(() => {});
   try {
     await setDoc(doc(db, 'notifications', id), { isRead: true }, { merge: true });
   } catch (err) {
@@ -906,7 +924,7 @@ export async function markNotificationAsReadInFirestore(id: string) {
   }
 }
 export async function deleteNotificationFromFirestore(id: string) {
-  deleteNotificationSupabase(id).catch((e) => console.warn('Supabase deleteNotification error:', e));
+  deleteNotificationSupabase(id).catch(() => {});
   try {
     await deleteDoc(doc(db, 'notifications', id));
   } catch (err) {
@@ -916,6 +934,7 @@ export async function deleteNotificationFromFirestore(id: string) {
 export async function markAllNotificationsReadInFirestore(notifications: Notification[]) {
   const unread = notifications.filter((n) => !n.isRead);
   if (unread.length === 0) return;
+  unread.forEach((n) => markNotificationReadSupabase(n.id).catch(() => {}));
   try {
     const batch = writeBatch(db);
     unread.forEach((n) => {
@@ -928,6 +947,7 @@ export async function markAllNotificationsReadInFirestore(notifications: Notific
 }
 export async function clearAllNotificationsInFirestore(notifications: Notification[]) {
   if (notifications.length === 0) return;
+  notifications.forEach((n) => deleteNotificationSupabase(n.id).catch(() => {}));
   try {
     const batch = writeBatch(db);
     notifications.forEach((n) => {

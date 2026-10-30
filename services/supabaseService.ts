@@ -27,6 +27,86 @@ export const supabase = createClient(
   supabaseConfig.supabaseAnonKey
 );
 
+// Track missing tables to warn gently once without spamming red console errors
+const warnedTables = new Set<string>();
+
+export function logSupabaseError(action: string, error: any) {
+  if (!error) return;
+  const errMsg = typeof error === 'string' ? error : (error.message || '');
+  const code = error.code || '';
+  if (code === 'PGRST205' || errMsg.includes('schema cache')) {
+    const tableMatch = errMsg.match(/'public\.([^']+)'/);
+    const tableName = tableMatch ? tableMatch[1] : 'table';
+    if (!warnedTables.has(tableName)) {
+      warnedTables.add(tableName);
+      console.warn(`[Supabase Note] Table "${tableName}" does not exist in Supabase yet. Changes are safely preserved. To enable it in Supabase, execute the SQL script in Supabase SQL editor.`);
+    }
+    return;
+  }
+  console.warn(`Supabase notice while ${action}:`, errMsg || error);
+}
+
+// Local notifications cache for fallback when Supabase table is pending creation
+function getLocalNotifications(userId: string): Notification[] {
+  try {
+    const raw = localStorage.getItem(`dafaaty_notifs_${userId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalNotification(item: Notification) {
+  try {
+    const existing = getLocalNotifications(item.userId);
+    const filtered = existing.filter((n) => n.id !== item.id);
+    const updated = [item, ...filtered].slice(0, 50);
+    localStorage.setItem(`dafaaty_notifs_${item.userId}`, JSON.stringify(updated));
+  } catch {}
+}
+
+function markLocalNotificationRead(id: string) {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('dafaaty_notifs_')) {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const items: Notification[] = JSON.parse(raw);
+          let changed = false;
+          items.forEach((n) => {
+            if (n.id === id) {
+              n.isRead = true;
+              changed = true;
+            }
+          });
+          if (changed) {
+            localStorage.setItem(key, JSON.stringify(items));
+          }
+        }
+      }
+    }
+  } catch {}
+}
+
+function deleteLocalNotification(id: string) {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('dafaaty_notifs_')) {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const items: Notification[] = JSON.parse(raw);
+          const filtered = items.filter((n) => n.id !== id);
+          if (filtered.length !== items.length) {
+            localStorage.setItem(key, JSON.stringify(filtered));
+          }
+        }
+      }
+    }
+  } catch {}
+}
+
 // --- Batches ---
 export async function getBatchesSupabase(): Promise<Batch[]> {
   const { data, error } = await supabase
@@ -763,7 +843,7 @@ export async function saveBatchSuggestionSupabase(item: BatchSuggestion): Promis
     upvoted_by: item.upvotes || [],
     created_at: item.createdAt || Date.now(),
   });
-  if (error) console.error('Error saving suggestion to Supabase:', error);
+  if (error) logSupabaseError('saving suggestion', error);
 }
 
 export async function deleteBatchSuggestionSupabase(id: string): Promise<void> {
@@ -772,47 +852,83 @@ export async function deleteBatchSuggestionSupabase(id: string): Promise<void> {
 
 // --- Notifications ---
 export async function getNotificationsSupabase(userId: string): Promise<Notification[]> {
-  const { data, error } = await supabase
-    .from('notifications')
-    .select('*')
-    .eq('user_id', userId)
-    .order('timestamp', { ascending: false })
-    .limit(50);
-  if (error) return [];
-  return (data || []).map((n) => ({
-    id: n.id,
-    userId: n.user_id,
-    batchCode: n.batch_code || undefined,
-    type: n.type as any,
-    title: n.title,
-    content: n.content,
-    isRead: Boolean(n.is_read),
-    targetTab: n.target_tab as any,
-    timestamp: Number(n.timestamp),
-  }));
+  const localItems = getLocalNotifications(userId);
+  try {
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', userId)
+      .order('timestamp', { ascending: false })
+      .limit(50);
+    if (error) {
+      logSupabaseError('fetching notifications', error);
+      return localItems;
+    }
+    const remoteList = (data || []).map((n) => ({
+      id: n.id,
+      userId: n.user_id,
+      batchCode: n.batch_code || undefined,
+      type: n.type as any,
+      title: n.title,
+      content: n.content,
+      isRead: Boolean(n.is_read),
+      targetTab: n.target_tab as any,
+      timestamp: Number(n.timestamp),
+    }));
+
+    // Merge remote and local notifications
+    const map = new Map<string, Notification>();
+    remoteList.forEach((n) => map.set(n.id, n));
+    localItems.forEach((n) => {
+      if (!map.has(n.id)) map.set(n.id, n);
+    });
+    return Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
+  } catch (err) {
+    return localItems;
+  }
 }
 
 export async function saveNotificationSupabase(item: Notification): Promise<void> {
-  const { error } = await supabase.from('notifications').upsert({
-    id: item.id,
-    user_id: item.userId,
-    batch_code: item.batchCode,
-    type: item.type,
-    title: item.title || '',
-    content: item.content,
-    is_read: item.isRead,
-    target_tab: item.targetTab,
-    timestamp: item.timestamp,
-  });
-  if (error) console.error('Error saving notification to Supabase:', error);
+  // Always persist locally so student/user never misses alerts even if table is not in Supabase yet
+  saveLocalNotification(item);
+  try {
+    const { error } = await supabase.from('notifications').upsert({
+      id: item.id,
+      user_id: item.userId,
+      batch_code: item.batchCode,
+      type: item.type,
+      title: item.title || '',
+      content: item.content,
+      is_read: item.isRead,
+      target_tab: item.targetTab,
+      timestamp: item.timestamp,
+    });
+    if (error) {
+      logSupabaseError('saving notification', error);
+    }
+  } catch (err) {
+    logSupabaseError('saving notification', err);
+  }
 }
 
 export async function markNotificationReadSupabase(id: string): Promise<void> {
-  await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+  markLocalNotificationRead(id);
+  try {
+    const { error } = await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+    if (error) logSupabaseError('marking notification read', error);
+  } catch (err) {
+    logSupabaseError('marking notification read', err);
+  }
 }
 
 export async function deleteNotificationSupabase(id: string): Promise<void> {
-  await supabase.from('notifications').delete().eq('id', id);
+  deleteLocalNotification(id);
+  try {
+    const { error } = await supabase.from('notifications').delete().eq('id', id);
+    if (error) logSupabaseError('deleting notification', error);
+  } catch (err) {
+    logSupabaseError('deleting notification', err);
+  }
 }
 
 // --- Join Requests ---
@@ -846,7 +962,7 @@ export async function saveJoinRequestSupabase(item: JoinRequest): Promise<void> 
     status: item.status,
     timestamp: item.timestamp,
   });
-  if (error) console.error('Error saving join request to Supabase:', error);
+  if (error) logSupabaseError('saving join request', error);
 }
 
 export async function deleteJoinRequestSupabase(id: string): Promise<void> {
@@ -866,7 +982,7 @@ export async function saveSettingSupabase(key: string, value: any): Promise<void
     value,
     updated_at: Date.now(),
   });
-  if (error) console.error('Error saving setting to Supabase:', error);
+  if (error) logSupabaseError('saving setting', error);
 }
 
 // --- Representative Codes ---
@@ -899,7 +1015,7 @@ export async function saveRepresentativeCodeSupabase(item: RepresentativeCode): 
     used_by_uid: item.usedByUid,
     used_by_name: item.usedByName,
   });
-  if (error) console.error('Error saving representative code to Supabase:', error);
+  if (error) logSupabaseError('saving representative code', error);
 }
 
 export async function deleteRepresentativeCodeSupabase(id: string): Promise<void> {
