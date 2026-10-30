@@ -447,13 +447,22 @@ export async function deleteAttendanceSessionSupabase(id: string): Promise<void>
 }
 
 export async function getAttendanceRecordsSupabase(batchCode: string): Promise<AttendanceRecord[]> {
-  const { data, error } = await supabase
-    .from('attendance_records')
-    .select('*')
-    .eq('batch_code', batchCode)
-    .order('timestamp', { ascending: false });
-  if (error) return [];
-  return (data || []).map((r) => ({
+  let allRows: any[] = [];
+  let from = 0;
+  const pageSize = 1000;
+  while (true) {
+    const { data, error } = await supabase
+      .from('attendance_records')
+      .select('*')
+      .eq('batch_code', batchCode)
+      .order('timestamp', { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error || !data || data.length === 0) break;
+    allRows = allRows.concat(data);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return allRows.map((r) => ({
     id: r.id,
     batchCode: r.batch_code,
     sessionId: r.session_id,

@@ -66,6 +66,7 @@ import {
   saveJoinRequestSupabase,
   deleteJoinRequestSupabase,
   saveSettingSupabase,
+  getRepresentativeCodesSupabase,
   saveRepresentativeCodeSupabase,
   deleteRepresentativeCodeSupabase,
 } from './supabaseService';
@@ -945,7 +946,13 @@ export function subscribeRepresentativeCodes(callback: (codes: RepresentativeCod
     list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     callback(list);
   }, (err) => {
-    console.error('Error in subscribeRepresentativeCodes:', err);
+    if (isQuotaError(err)) {
+      notifyQuotaExceeded();
+      console.warn('Firestore quota exceeded on representative_codes; falling back to Supabase.');
+      getRepresentativeCodesSupabase().then(callback).catch(() => {});
+      return;
+    }
+    console.warn('Note in subscribeRepresentativeCodes:', err);
   });
 }
 

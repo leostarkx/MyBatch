@@ -50,6 +50,20 @@ import {
   saveGradeSupabase,
   getChatMessagesSupabase,
   saveChatMessageSupabase,
+  getMaterialSectionsSupabase,
+  saveMaterialSectionSupabase,
+  getMaterialsSupabase,
+  saveMaterialSupabase,
+  getProjectsSupabase,
+  saveProjectSupabase,
+  getStudentSummariesSupabase,
+  saveStudentSummarySupabase,
+  getBatchSuggestionsSupabase,
+  saveBatchSuggestionSupabase,
+  getJoinRequestsSupabase,
+  saveJoinRequestSupabase,
+  getRepresentativeCodesSupabase,
+  saveRepresentativeCodeSupabase,
   subscribeTableSupabase,
 } from "./services/supabaseService";
 import {
@@ -737,7 +751,7 @@ export default function App() {
 
   const effectiveBatchCode = (currentUser?.username === 'ahmed' && isStealthMode) 
     ? stealthBatchCode 
-    : currentUser?.batchCode || "";
+    : (currentUser?.batchCode || (batches.length > 0 ? (batches.find(b => b.code !== 'CS-2024')?.code || batches[0].code) : "ITUOK5"));
 
   // Batch Management State (Developer / Owner)
   const [isAddingBatch, setIsAddingBatch] = useState(false);
@@ -1156,13 +1170,22 @@ export default function App() {
       setRepresentativeCodes([]);
       return;
     }
-    const unsub = subscribeRepresentativeCodes((codes) => {
-      setRepresentativeCodes(codes);
+    getRepresentativeCodesSupabase().then((codes) => {
+      if (codes && codes.length > 0) setRepresentativeCodes(codes);
     });
-    return () => unsub();
+    const unsubSb = subscribeTableSupabase('representative_codes', '', () => {
+      getRepresentativeCodesSupabase().then(setRepresentativeCodes);
+    });
+    const unsub = subscribeRepresentativeCodes((codes) => {
+      if (codes && codes.length > 0) setRepresentativeCodes(codes);
+    });
+    return () => {
+      unsubSb();
+      unsub();
+    };
   }, [currentUser?.role]);
 
-  // 1. Core Global Subscriptions (lightweight, needed for dashboard, schedule, and tasks)
+  // 1. All Batch Collections: Eagerly load & sync with Supabase Realtime (zero quota limits)
   useEffect(() => {
     if (!effectiveBatchCode) {
       setAnnouncements([]);
@@ -1170,6 +1193,14 @@ export default function App() {
       setSchedules([]);
       setAssignments([]);
       setExams([]);
+      setAttendanceSessions([]);
+      setAttendanceRecords([]);
+      setGrades([]);
+      setMaterialSections([]);
+      setMaterials([]);
+      setProjects([]);
+      setStudentSummaries([]);
+      setBatchSuggestions([]);
       return;
     }
 
@@ -1189,6 +1220,30 @@ export default function App() {
     getExamsSupabase(effectiveBatchCode).then((items) => {
       if (items && items.length > 0) setExams(items);
     });
+    getAttendanceSessionsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setAttendanceSessions(items);
+    });
+    getAttendanceRecordsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setAttendanceRecords(items);
+    });
+    getGradesSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setGrades(items);
+    });
+    getMaterialSectionsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setMaterialSections(items);
+    });
+    getMaterialsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setMaterials(items);
+    });
+    getProjectsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setProjects(items);
+    });
+    getStudentSummariesSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setStudentSummaries(items);
+    });
+    getBatchSuggestionsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setBatchSuggestions(items);
+    });
 
     // Supabase Realtime channels
     const unsubSbAnn = subscribeTableSupabase('announcements', effectiveBatchCode, () => {
@@ -1206,8 +1261,32 @@ export default function App() {
     const unsubSbExams = subscribeTableSupabase('exams', effectiveBatchCode, () => {
       getExamsSupabase(effectiveBatchCode).then(setExams);
     });
+    const unsubSbAttSessions = subscribeTableSupabase('attendance_sessions', effectiveBatchCode, () => {
+      getAttendanceSessionsSupabase(effectiveBatchCode).then(setAttendanceSessions);
+    });
+    const unsubSbAttRecords = subscribeTableSupabase('attendance_records', effectiveBatchCode, () => {
+      getAttendanceRecordsSupabase(effectiveBatchCode).then(setAttendanceRecords);
+    });
+    const unsubSbGrades = subscribeTableSupabase('grades', effectiveBatchCode, () => {
+      getGradesSupabase(effectiveBatchCode).then(setGrades);
+    });
+    const unsubSbSections = subscribeTableSupabase('material_sections', effectiveBatchCode, () => {
+      getMaterialSectionsSupabase(effectiveBatchCode).then(setMaterialSections);
+    });
+    const unsubSbMaterials = subscribeTableSupabase('materials', effectiveBatchCode, () => {
+      getMaterialsSupabase(effectiveBatchCode).then(setMaterials);
+    });
+    const unsubSbProjects = subscribeTableSupabase('projects', effectiveBatchCode, () => {
+      getProjectsSupabase(effectiveBatchCode).then(setProjects);
+    });
+    const unsubSbSummaries = subscribeTableSupabase('student_summaries', effectiveBatchCode, () => {
+      getStudentSummariesSupabase(effectiveBatchCode).then(setStudentSummaries);
+    });
+    const unsubSbSuggestions = subscribeTableSupabase('batch_suggestions', effectiveBatchCode, () => {
+      getBatchSuggestionsSupabase(effectiveBatchCode).then(setBatchSuggestions);
+    });
 
-    // Firestore fallback listeners
+    // Firestore fallback listeners (safely catches quota errors in firebase.ts)
     const unsubAnnouncements = subscribeAnnouncements(effectiveBatchCode, (items) => {
       if (items && items.length > 0) setAnnouncements(items);
     });
@@ -1223,6 +1302,30 @@ export default function App() {
     const unsubExams = subscribeExams(effectiveBatchCode, (items) => {
       if (items && items.length > 0) setExams(items);
     });
+    const unsubSessions = subscribeAttendanceSessions(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setAttendanceSessions(items);
+    });
+    const unsubRecords = subscribeAttendanceRecords(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setAttendanceRecords(items);
+    });
+    const unsubGrades = subscribeGrades(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setGrades(items);
+    });
+    const unsubSections = subscribeMaterialSections(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setMaterialSections(items);
+    });
+    const unsubMaterials = subscribeMaterials(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setMaterials(items);
+    });
+    const unsubProjects = subscribeProjects(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setProjects(items);
+    });
+    const unsubSummaries = subscribeStudentSummaries(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setStudentSummaries(items);
+    });
+    const unsubSuggestions = subscribeBatchSuggestions(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setBatchSuggestions(items);
+    });
 
     return () => {
       unsubSbAnn();
@@ -1230,17 +1333,36 @@ export default function App() {
       unsubSbSchedules();
       unsubSbAssignments();
       unsubSbExams();
+      unsubSbAttSessions();
+      unsubSbAttRecords();
+      unsubSbGrades();
+      unsubSbSections();
+      unsubSbMaterials();
+      unsubSbProjects();
+      unsubSbSummaries();
+      unsubSbSuggestions();
       unsubAnnouncements();
       unsubCourses();
       unsubSchedules();
       unsubAssignments();
       unsubExams();
+      unsubSessions();
+      unsubRecords();
+      unsubGrades();
+      unsubSections();
+      unsubMaterials();
+      unsubProjects();
+      unsubSummaries();
+      unsubSuggestions();
     };
   }, [effectiveBatchCode]);
 
-  // 2. Chat Messages: Lazy-subscribe ONLY when on Chat tab to prevent constant read spikes
+  // 2. Chat Messages: Subscribe when on Chat or Community Hub tab
   useEffect(() => {
-    if (!effectiveBatchCode || activeTab !== Tab.CHAT) {
+    if (
+      !effectiveBatchCode ||
+      (activeTab !== Tab.CHAT && activeTab !== Tab.COMMUNITY_HUB)
+    ) {
       return;
     }
 
@@ -1259,119 +1381,6 @@ export default function App() {
     return () => {
       unsubSbChat();
       unsubChat();
-    };
-  }, [effectiveBatchCode, activeTab]);
-
-  // 3. Attendance Sessions & Records: Lazy-subscribe ONLY when on Attendance or Grades tab
-  useEffect(() => {
-    if (
-      !effectiveBatchCode ||
-      (activeTab !== Tab.ATTENDANCE && activeTab !== Tab.GRADES)
-    ) {
-      return;
-    }
-
-    getAttendanceSessionsSupabase(effectiveBatchCode).then((items) => {
-      if (items && items.length > 0) setAttendanceSessions(items);
-    });
-    getAttendanceRecordsSupabase(effectiveBatchCode).then((items) => {
-      if (items && items.length > 0) setAttendanceRecords(items);
-    });
-
-    const unsubSbAtt = subscribeTableSupabase('attendance_records', effectiveBatchCode, () => {
-      getAttendanceRecordsSupabase(effectiveBatchCode).then(setAttendanceRecords);
-    });
-
-    const unsubSessions = subscribeAttendanceSessions(effectiveBatchCode, (items) => {
-      if (items && items.length > 0) setAttendanceSessions(items);
-    });
-    const unsubRecords = subscribeAttendanceRecords(effectiveBatchCode, (items) => {
-      if (items && items.length > 0) setAttendanceRecords(items);
-    });
-
-    return () => {
-      unsubSbAtt();
-      unsubSessions();
-      unsubRecords();
-    };
-  }, [effectiveBatchCode, activeTab]);
-
-  // 4. Grades: Lazy-subscribe ONLY when on Grades tab
-  useEffect(() => {
-    if (!effectiveBatchCode || activeTab !== Tab.GRADES) {
-      return;
-    }
-
-    getGradesSupabase(effectiveBatchCode).then((items) => {
-      if (items && items.length > 0) setGrades(items);
-    });
-
-    const unsubSbGrades = subscribeTableSupabase('grades', effectiveBatchCode, () => {
-      getGradesSupabase(effectiveBatchCode).then(setGrades);
-    });
-
-    const unsubGrades = subscribeGrades(effectiveBatchCode, (items) => {
-      if (items && items.length > 0) setGrades(items);
-    });
-
-    return () => {
-      unsubSbGrades();
-      unsubGrades();
-    };
-  }, [effectiveBatchCode, activeTab]);
-
-  // 5. Materials & Sections: Lazy-subscribe ONLY when on Materials tab
-  useEffect(() => {
-    if (!effectiveBatchCode || activeTab !== Tab.MATERIALS) {
-      return;
-    }
-    const unsubSections = subscribeMaterialSections(effectiveBatchCode, (items) => {
-      setMaterialSections(items);
-    });
-    const unsubMaterials = subscribeMaterials(effectiveBatchCode, (items) => {
-      setMaterials(items);
-    });
-    return () => {
-      unsubSections();
-      unsubMaterials();
-    };
-  }, [effectiveBatchCode, activeTab]);
-
-  // 6. Projects: Lazy-subscribe ONLY when on Projects tab
-  useEffect(() => {
-    if (!effectiveBatchCode || activeTab !== Tab.PROJECTS) {
-      return;
-    }
-    const unsubProjects = subscribeProjects(effectiveBatchCode, (items) => {
-      setProjects(items);
-    });
-    return () => {
-      unsubProjects();
-    };
-  }, [effectiveBatchCode, activeTab]);
-
-  // 7. Summaries & Suggestions: Lazy-subscribe ONLY when on Summaries or Suggestions tab
-  useEffect(() => {
-    if (!effectiveBatchCode) return;
-
-    let unsubSummaries = () => {};
-    let unsubSuggestions = () => {};
-
-    if (activeTab === Tab.SUMMARIES) {
-      unsubSummaries = subscribeStudentSummaries(effectiveBatchCode, (items) => {
-        setStudentSummaries(items);
-      });
-    }
-
-    if (activeTab === Tab.SUGGESTIONS) {
-      unsubSuggestions = subscribeBatchSuggestions(effectiveBatchCode, (items) => {
-        setBatchSuggestions(items);
-      });
-    }
-
-    return () => {
-      unsubSummaries();
-      unsubSuggestions();
     };
   }, [effectiveBatchCode, activeTab]);
 
@@ -1444,14 +1453,25 @@ export default function App() {
     }
 
     const targetCode = currentUser.batchCode || effectiveBatchCode;
+    getJoinRequestsSupabase(isOwner ? undefined : targetCode).then((items) => {
+      if (items && items.length > 0) setJoinRequests(items);
+    });
+
+    const unsubSbReqs = subscribeTableSupabase('join_requests', isOwner ? '' : targetCode, () => {
+      getJoinRequestsSupabase(isOwner ? undefined : targetCode).then(setJoinRequests);
+    });
+
     const unsubReqs = subscribeJoinRequests(
       targetCode,
       (items) => {
-        setJoinRequests(items);
+        if (items && items.length > 0) setJoinRequests(items);
       },
       isOwner
     );
-    return () => unsubReqs();
+    return () => {
+      unsubSbReqs();
+      unsubReqs();
+    };
   }, [currentUser?.uid, currentUser?.role, currentUser?.batchCode, effectiveBatchCode]);
 
   // Update CSS Variables when theme changes
