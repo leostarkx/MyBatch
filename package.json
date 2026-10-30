@@ -10,6 +10,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "firebase": "^12.19.0",
     "html2pdf.js": "^0.14.0",
     "lucide-react": "^0.564.0",

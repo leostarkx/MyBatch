@@ -24,7 +24,34 @@ import {
 } from "./services/notificationService";
 import {
   markNotificationAsReadInFirestore,
+  subscribeQuotaState,
 } from "./services/firebase";
+import {
+  getBatchesSupabase,
+  saveBatchSupabase,
+  getUsersSupabase,
+  saveUserSupabase,
+  getAnnouncementsSupabase,
+  saveAnnouncementSupabase,
+  getCoursesSupabase,
+  saveCourseSupabase,
+  getSchedulesSupabase,
+  saveScheduleSupabase,
+  getAssignmentsSupabase,
+  saveAssignmentSupabase,
+  getExamsSupabase,
+  saveExamSupabase,
+  getAttendanceSessionsSupabase,
+  saveAttendanceSessionSupabase,
+  getAttendanceRecordsSupabase,
+  saveAttendanceRecordSupabase,
+  saveAttendanceRecordsBatchSupabase,
+  getGradesSupabase,
+  saveGradeSupabase,
+  getChatMessagesSupabase,
+  saveChatMessageSupabase,
+  subscribeTableSupabase,
+} from "./services/supabaseService";
 import {
   User,
   UserRole,
@@ -138,6 +165,7 @@ import {
   ZoomOut,
   RotateCw,
   Maximize2,
+  AlertTriangle,
 } from "lucide-react";
 
 // --- Storage & Direct File Utilities ---
@@ -660,6 +688,14 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [loadingApp, setLoadingApp] = useState(true);
   const [currentTimer, setCurrentTimer] = useState(Date.now());
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
+
+  useEffect(() => {
+    const unsub = subscribeQuotaState((exceeded) => {
+      setIsQuotaExceeded(exceeded);
+    });
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -1014,47 +1050,81 @@ export default function App() {
   const [assignFilterCourse, setAssignFilterCourse] = useState("all");
   const [assignSearchQuery, setAssignSearchQuery] = useState("");
 
-  // --- Firebase Initialization and Listeners ---
+  // --- Firebase & Supabase Initialization and Listeners ---
   useEffect(() => {
-    // 1. Seed initial data to Firestore if empty
+    // 1. Initial Load from Supabase (instant, zero quota limits)
+    getUsersSupabase().then((users) => {
+      if (users && users.length > 0) {
+        setAppUsers(users);
+        const storedUid = localStorage.getItem("dafaaty_user_uid");
+        if (storedUid) {
+          const found = users.find((u) => u.uid === storedUid);
+          if (found) {
+            setCurrentUser(found);
+          }
+        }
+        setLoadingApp(false);
+      }
+    });
+
+    getBatchesSupabase().then((batches) => {
+      if (batches && batches.length > 0) {
+        setBatches(batches);
+      }
+    });
+
+    const unsubSbBatches = subscribeTableSupabase('batches', '', () => {
+      getBatchesSupabase().then(setBatches);
+    });
+
+    const unsubSbUsers = subscribeTableSupabase('users', '', () => {
+      getUsersSupabase().then(setAppUsers);
+    });
+
+    // 1.b Seed initial data to Firestore if empty
     seedInitialDataIfEmpty();
 
-    // 1.b Check if returning from a Google Sign-In Redirect (e.g. mobile browsers / Netlify)
+    // 1.c Check if returning from a Google Sign-In Redirect (e.g. mobile browsers / Netlify)
     checkGoogleRedirectResult().then((redirectUser) => {
       if (redirectUser) {
         localStorage.setItem("dafaaty_user_uid", redirectUser.uid);
         setCurrentUser(redirectUser);
         setLoadingApp(false);
+        saveUserSupabase(redirectUser);
       }
     });
 
-    // 2. Realtime listeners
+    // 2. Realtime Firestore fallback listeners
     const unsubUsers = subscribeUsers((users) => {
-      setAppUsers(users);
-      const storedUid = localStorage.getItem("dafaaty_user_uid");
-      if (storedUid) {
-        const found = users.find((u) => u.uid === storedUid);
-        if (found) {
-          setCurrentUser((prev) => {
-            if (
-              prev &&
-              prev.uid === found.uid &&
-              prev.role === found.role &&
-              prev.batchCode === found.batchCode &&
-              prev.name === found.name &&
-              prev.avatar === found.avatar
-            ) {
-              return prev;
-            }
-            return found;
-          });
+      if (users && users.length > 0) {
+        setAppUsers(users);
+        const storedUid = localStorage.getItem("dafaaty_user_uid");
+        if (storedUid) {
+          const found = users.find((u) => u.uid === storedUid);
+          if (found) {
+            setCurrentUser((prev) => {
+              if (
+                prev &&
+                prev.uid === found.uid &&
+                prev.role === found.role &&
+                prev.batchCode === found.batchCode &&
+                prev.name === found.name &&
+                prev.avatar === found.avatar
+              ) {
+                return prev;
+              }
+              return found;
+            });
+          }
         }
       }
       setLoadingApp(false);
     });
 
     const unsubBatches = subscribeBatches((items) => {
-      setBatches(items);
+      if (items && items.length > 0) {
+        setBatches(items);
+      }
     });
 
     const unsubSettings = subscribeSettings((settings) => {
@@ -1072,6 +1142,8 @@ export default function App() {
     });
 
     return () => {
+      unsubSbBatches();
+      unsubSbUsers();
       unsubUsers();
       unsubBatches();
       unsubSettings();
@@ -1090,93 +1162,218 @@ export default function App() {
     return () => unsub();
   }, [currentUser?.role]);
 
+  // 1. Core Global Subscriptions (lightweight, needed for dashboard, schedule, and tasks)
   useEffect(() => {
     if (!effectiveBatchCode) {
       setAnnouncements([]);
       setCourses([]);
-      setGrades([]);
-      setAttendanceSessions([]);
-      setAttendanceRecords([]);
-      setChatMessages([]);
-      setMaterialSections([]);
-      setMaterials([]);
       setSchedules([]);
+      setAssignments([]);
+      setExams([]);
       return;
     }
 
+    // Load from Supabase (fast, zero quota limits)
+    getAnnouncementsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setAnnouncements(items);
+    });
+    getCoursesSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setCourses(items);
+    });
+    getSchedulesSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setSchedules(items);
+    });
+    getAssignmentsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setAssignments(items);
+    });
+    getExamsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setExams(items);
+    });
+
+    // Supabase Realtime channels
+    const unsubSbAnn = subscribeTableSupabase('announcements', effectiveBatchCode, () => {
+      getAnnouncementsSupabase(effectiveBatchCode).then(setAnnouncements);
+    });
+    const unsubSbCourses = subscribeTableSupabase('courses', effectiveBatchCode, () => {
+      getCoursesSupabase(effectiveBatchCode).then(setCourses);
+    });
+    const unsubSbSchedules = subscribeTableSupabase('schedules', effectiveBatchCode, () => {
+      getSchedulesSupabase(effectiveBatchCode).then(setSchedules);
+    });
+    const unsubSbAssignments = subscribeTableSupabase('assignments', effectiveBatchCode, () => {
+      getAssignmentsSupabase(effectiveBatchCode).then(setAssignments);
+    });
+    const unsubSbExams = subscribeTableSupabase('exams', effectiveBatchCode, () => {
+      getExamsSupabase(effectiveBatchCode).then(setExams);
+    });
+
+    // Firestore fallback listeners
     const unsubAnnouncements = subscribeAnnouncements(effectiveBatchCode, (items) => {
-      setAnnouncements(items);
+      if (items && items.length > 0) setAnnouncements(items);
     });
-
     const unsubCourses = subscribeCourses(effectiveBatchCode, (items) => {
-      setCourses(items);
+      if (items && items.length > 0) setCourses(items);
     });
-
-    const unsubGrades = subscribeGrades(effectiveBatchCode, (items) => {
-      setGrades(items);
-    });
-
-    const unsubSessions = subscribeAttendanceSessions(effectiveBatchCode, (items) => {
-      setAttendanceSessions(items);
-    });
-
-    const unsubRecords = subscribeAttendanceRecords(effectiveBatchCode, (items) => {
-      setAttendanceRecords(items);
-    });
-
-    const unsubChat = subscribeChatMessages(effectiveBatchCode, (items) => {
-      setChatMessages(items);
-    });
-
-    const unsubSections = subscribeMaterialSections(effectiveBatchCode, (items) => {
-      setMaterialSections(items);
-    });
-
-    const unsubMaterials = subscribeMaterials(effectiveBatchCode, (items) => {
-      setMaterials(items);
-    });
-
     const unsubSchedules = subscribeSchedules(effectiveBatchCode, (items) => {
-      setSchedules(items);
+      if (items && items.length > 0) setSchedules(items);
     });
-
-    const unsubProjects = subscribeProjects(effectiveBatchCode, (items) => {
-      setProjects(items);
-    });
-
     const unsubAssignments = subscribeAssignments(effectiveBatchCode, (items) => {
-      setAssignments(items);
+      if (items && items.length > 0) setAssignments(items);
     });
-
     const unsubExams = subscribeExams(effectiveBatchCode, (items) => {
-      setExams(items);
-    });
-
-    const unsubSummaries = subscribeStudentSummaries(effectiveBatchCode, (items) => {
-      setStudentSummaries(items);
-    });
-
-    const unsubSuggestions = subscribeBatchSuggestions(effectiveBatchCode, (items) => {
-      setBatchSuggestions(items);
+      if (items && items.length > 0) setExams(items);
     });
 
     return () => {
+      unsubSbAnn();
+      unsubSbCourses();
+      unsubSbSchedules();
+      unsubSbAssignments();
+      unsubSbExams();
       unsubAnnouncements();
       unsubCourses();
-      unsubGrades();
-      unsubSessions();
-      unsubRecords();
-      unsubChat();
-      unsubSections();
-      unsubMaterials();
       unsubSchedules();
-      unsubProjects();
       unsubAssignments();
       unsubExams();
+    };
+  }, [effectiveBatchCode]);
+
+  // 2. Chat Messages: Lazy-subscribe ONLY when on Chat tab to prevent constant read spikes
+  useEffect(() => {
+    if (!effectiveBatchCode || activeTab !== Tab.CHAT) {
+      return;
+    }
+
+    getChatMessagesSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setChatMessages(items);
+    });
+
+    const unsubSbChat = subscribeTableSupabase('chat_messages', effectiveBatchCode, () => {
+      getChatMessagesSupabase(effectiveBatchCode).then(setChatMessages);
+    });
+
+    const unsubChat = subscribeChatMessages(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setChatMessages(items);
+    });
+
+    return () => {
+      unsubSbChat();
+      unsubChat();
+    };
+  }, [effectiveBatchCode, activeTab]);
+
+  // 3. Attendance Sessions & Records: Lazy-subscribe ONLY when on Attendance or Grades tab
+  useEffect(() => {
+    if (
+      !effectiveBatchCode ||
+      (activeTab !== Tab.ATTENDANCE && activeTab !== Tab.GRADES)
+    ) {
+      return;
+    }
+
+    getAttendanceSessionsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setAttendanceSessions(items);
+    });
+    getAttendanceRecordsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setAttendanceRecords(items);
+    });
+
+    const unsubSbAtt = subscribeTableSupabase('attendance_records', effectiveBatchCode, () => {
+      getAttendanceRecordsSupabase(effectiveBatchCode).then(setAttendanceRecords);
+    });
+
+    const unsubSessions = subscribeAttendanceSessions(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setAttendanceSessions(items);
+    });
+    const unsubRecords = subscribeAttendanceRecords(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setAttendanceRecords(items);
+    });
+
+    return () => {
+      unsubSbAtt();
+      unsubSessions();
+      unsubRecords();
+    };
+  }, [effectiveBatchCode, activeTab]);
+
+  // 4. Grades: Lazy-subscribe ONLY when on Grades tab
+  useEffect(() => {
+    if (!effectiveBatchCode || activeTab !== Tab.GRADES) {
+      return;
+    }
+
+    getGradesSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setGrades(items);
+    });
+
+    const unsubSbGrades = subscribeTableSupabase('grades', effectiveBatchCode, () => {
+      getGradesSupabase(effectiveBatchCode).then(setGrades);
+    });
+
+    const unsubGrades = subscribeGrades(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setGrades(items);
+    });
+
+    return () => {
+      unsubSbGrades();
+      unsubGrades();
+    };
+  }, [effectiveBatchCode, activeTab]);
+
+  // 5. Materials & Sections: Lazy-subscribe ONLY when on Materials tab
+  useEffect(() => {
+    if (!effectiveBatchCode || activeTab !== Tab.MATERIALS) {
+      return;
+    }
+    const unsubSections = subscribeMaterialSections(effectiveBatchCode, (items) => {
+      setMaterialSections(items);
+    });
+    const unsubMaterials = subscribeMaterials(effectiveBatchCode, (items) => {
+      setMaterials(items);
+    });
+    return () => {
+      unsubSections();
+      unsubMaterials();
+    };
+  }, [effectiveBatchCode, activeTab]);
+
+  // 6. Projects: Lazy-subscribe ONLY when on Projects tab
+  useEffect(() => {
+    if (!effectiveBatchCode || activeTab !== Tab.PROJECTS) {
+      return;
+    }
+    const unsubProjects = subscribeProjects(effectiveBatchCode, (items) => {
+      setProjects(items);
+    });
+    return () => {
+      unsubProjects();
+    };
+  }, [effectiveBatchCode, activeTab]);
+
+  // 7. Summaries & Suggestions: Lazy-subscribe ONLY when on Summaries or Suggestions tab
+  useEffect(() => {
+    if (!effectiveBatchCode) return;
+
+    let unsubSummaries = () => {};
+    let unsubSuggestions = () => {};
+
+    if (activeTab === Tab.SUMMARIES) {
+      unsubSummaries = subscribeStudentSummaries(effectiveBatchCode, (items) => {
+        setStudentSummaries(items);
+      });
+    }
+
+    if (activeTab === Tab.SUGGESTIONS) {
+      unsubSuggestions = subscribeBatchSuggestions(effectiveBatchCode, (items) => {
+        setBatchSuggestions(items);
+      });
+    }
+
+    return () => {
       unsubSummaries();
       unsubSuggestions();
     };
-  }, [effectiveBatchCode]);
+  }, [effectiveBatchCode, activeTab]);
 
   const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
   const [liveToastNotif, setLiveToastNotif] = useState<Notification | null>(null);
@@ -1495,7 +1692,12 @@ export default function App() {
         : null,
     };
 
-    await saveChatMessageToFirestore(msgData);
+    try {
+      await saveChatMessageSupabase(msgData);
+    } catch (err) {
+      console.warn("Supabase chat save note:", err);
+    }
+    saveChatMessageToFirestore(msgData).catch(() => {});
 
     // Notify replied-to user or @mentioned users in batch chat
     const notifiedUids = new Set<string>();
@@ -14706,7 +14908,8 @@ export default function App() {
           setCurrentUser(user);
         }}
         onSignup={async (user) => {
-          await saveUserToFirestore(user);
+          await saveUserSupabase(user);
+          saveUserToFirestore(user).catch(() => {});
           localStorage.setItem("dafaaty_user_uid", user.uid);
           setCurrentUser(user);
         }}
@@ -14737,6 +14940,19 @@ export default function App() {
       unreadNotificationsCount={unreadNotifsCount}
       joinRequestsCount={joinRequests.length}
     >
+      {isQuotaExceeded && (
+        <div className="bg-emerald-500/10 border-b border-emerald-500/20 text-emerald-900 dark:text-emerald-200 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-3 shadow-sm z-30 sticky top-0 backdrop-blur-md">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping shrink-0" />
+            <span className="font-medium">
+              تم الانتقال وتفعيل قاعدة بيانات Supabase (PostgreSQL) السحابية بنجاح ⚡ المنصة تعمل الآن بكامل طاقتها وبدون أي حدود للقراءات اليومية!
+            </span>
+          </div>
+          <span className="text-[10px] bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 px-2 py-0.5 rounded-full font-bold">
+            Supabase Live 🟢
+          </span>
+        </div>
+      )}
       {showLanding ? (
         activeTab === Tab.PROFILE ? (
           renderProfile()

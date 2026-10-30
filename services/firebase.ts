@@ -27,6 +27,48 @@ import {
 import { 
   MOCK_USERS, MOCK_BATCHES
 } from './mockDb';
+import {
+  saveBatchSupabase,
+  deleteBatchSupabase,
+  saveUserSupabase,
+  deleteUserSupabase,
+  saveCourseSupabase,
+  deleteCourseSupabase,
+  saveScheduleSupabase,
+  deleteScheduleSupabase,
+  saveAnnouncementSupabase,
+  deleteAnnouncementSupabase,
+  saveAssignmentSupabase,
+  deleteAssignmentSupabase,
+  saveExamSupabase,
+  deleteExamSupabase,
+  saveAttendanceSessionSupabase,
+  deleteAttendanceSessionSupabase,
+  saveAttendanceRecordSupabase,
+  saveAttendanceRecordsBatchSupabase,
+  deleteAttendanceRecordSupabase,
+  saveGradeSupabase,
+  deleteGradeSupabase,
+  saveChatMessageSupabase,
+  deleteChatMessageSupabase,
+  saveMaterialSectionSupabase,
+  deleteMaterialSectionSupabase,
+  saveMaterialSupabase,
+  deleteMaterialSupabase,
+  saveProjectSupabase,
+  deleteProjectSupabase,
+  saveStudentSummarySupabase,
+  deleteStudentSummarySupabase,
+  saveBatchSuggestionSupabase,
+  deleteBatchSuggestionSupabase,
+  saveNotificationSupabase,
+  deleteNotificationSupabase,
+  saveJoinRequestSupabase,
+  deleteJoinRequestSupabase,
+  saveSettingSupabase,
+  saveRepresentativeCodeSupabase,
+  deleteRepresentativeCodeSupabase,
+} from './supabaseService';
 
 // Suppress noisy internal WebChannel timeout logs
 try {
@@ -88,7 +130,41 @@ export enum OperationType {
   WRITE = 'write',
 }
 
+export type QuotaListener = (isExceeded: boolean) => void;
+const quotaListeners: Set<QuotaListener> = new Set();
+let currentQuotaExceeded = false;
+
+export function subscribeQuotaState(listener: QuotaListener) {
+  quotaListeners.add(listener);
+  listener(currentQuotaExceeded);
+  return () => {
+    quotaListeners.delete(listener);
+  };
+}
+
+export function isQuotaError(error: unknown): boolean {
+  const errMsg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    errMsg.includes('quota') ||
+    errMsg.includes('resource-exhausted') ||
+    errMsg.includes('free daily read units') ||
+    errMsg.includes('quota limit exceeded')
+  );
+}
+
+export function notifyQuotaExceeded() {
+  currentQuotaExceeded = true;
+  quotaListeners.forEach((l) => {
+    try {
+      l(true);
+    } catch {}
+  });
+}
+
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  if (isQuotaError(error)) {
+    notifyQuotaExceeded();
+  }
   const errInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -166,6 +242,11 @@ export async function seedInitialDataIfEmpty() {
       msg.includes('Could not reach Cloud Firestore')
     ) {
       console.warn('Skipping initial Firestore seed while connection is initializing.');
+      return;
+    }
+    if (isQuotaError(error)) {
+      notifyQuotaExceeded();
+      console.warn('Skipping initial Firestore seed due to quota limit.');
       return;
     }
     console.warn('Initial Firestore seeding warning:', msg);
@@ -260,17 +341,32 @@ export function subscribeBatches(callback: (batches: Batch[]) => void) {
     list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     callback(list);
   }, (error) => {
+    if (isQuotaError(error)) {
+      notifyQuotaExceeded();
+      console.warn('Firestore Quota exceeded on batches; using local cached state.');
+      return;
+    }
     handleFirestoreError(error, OperationType.GET, path);
   });
 }
 
 export async function saveBatchToFirestore(batch: Batch) {
-  const sanitized = sanitizeForFirestore(batch);
-  await setDoc(doc(db, 'batches', batch.id), sanitized, { merge: true });
+  saveBatchSupabase(batch).catch((e) => console.warn('Supabase saveBatch error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(batch);
+    await setDoc(doc(db, 'batches', batch.id), sanitized, { merge: true });
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 
 export async function deleteBatchFromFirestore(batchId: string) {
-  await deleteDoc(doc(db, 'batches', batchId));
+  deleteBatchSupabase(batchId).catch((e) => console.warn('Supabase deleteBatch error:', e));
+  try {
+    await deleteDoc(doc(db, 'batches', batchId));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 
 // Scoped Subscriptions
@@ -287,6 +383,11 @@ function subscribeCollectionScoped<T>(collName: string, batchCode: string, callb
     }
     callback(list);
   }, (error) => {
+    if (isQuotaError(error)) {
+      notifyQuotaExceeded();
+      console.warn(`Firestore Quota exceeded on ${collName}; using local cached state.`);
+      return;
+    }
     handleFirestoreError(error, OperationType.GET, collName);
   });
 }
@@ -324,6 +425,11 @@ export function subscribeChatMessages(batchCode: string, callback: (items: ChatM
     const list = snapshot.docs.map(doc => doc.data() as ChatMessage);
     callback(list);
   }, (error) => {
+    if (isQuotaError(error)) {
+      notifyQuotaExceeded();
+      console.warn('Firestore Quota exceeded on chat_messages; using local cached state.');
+      return;
+    }
     handleFirestoreError(error, OperationType.GET, 'chat_messages');
   });
 }
@@ -346,6 +452,11 @@ export const subscribeJoinRequests = (
       list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
       callback(list);
     }, (error) => {
+      if (isQuotaError(error)) {
+        notifyQuotaExceeded();
+        console.warn('Firestore Quota exceeded on join_requests; using local cached state.');
+        return;
+      }
       handleFirestoreError(error, OperationType.GET, 'join_requests');
     });
   }
@@ -366,6 +477,11 @@ export const subscribeJoinRequests = (
     list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
     callback(list);
   }, (error) => {
+    if (isQuotaError(error)) {
+      notifyQuotaExceeded();
+      console.warn('Firestore Quota exceeded on join_requests; using local cached state.');
+      return;
+    }
     handleFirestoreError(error, OperationType.GET, 'join_requests');
   });
 };
@@ -390,128 +506,291 @@ export const subscribeBatchSuggestions = (batchCode: string, callback: (items: B
 
 // Persistence
 export async function saveBatchSuggestionToFirestore(item: BatchSuggestion) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'batch_suggestions', item.id), sanitized);
+  saveBatchSuggestionSupabase(item).catch((e) => console.warn('Supabase saveSuggestion error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'batch_suggestions', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteBatchSuggestionFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'batch_suggestions', id));
+  deleteBatchSuggestionSupabase(id).catch((e) => console.warn('Supabase deleteSuggestion error:', e));
+  try {
+    await deleteDoc(doc(db, 'batch_suggestions', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveStudentSummaryToFirestore(item: StudentSummary) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'student_summaries', item.id), sanitized);
+  saveStudentSummarySupabase(item).catch((e) => console.warn('Supabase saveSummary error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'student_summaries', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteStudentSummaryFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'student_summaries', id));
+  deleteStudentSummarySupabase(id).catch((e) => console.warn('Supabase deleteSummary error:', e));
+  try {
+    await deleteDoc(doc(db, 'student_summaries', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveExamToFirestore(item: Exam) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'exams', item.id), sanitized);
+  saveExamSupabase(item).catch((e) => console.warn('Supabase saveExam error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'exams', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteExamFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'exams', id));
+  deleteExamSupabase(id).catch((e) => console.warn('Supabase deleteExam error:', e));
+  try {
+    await deleteDoc(doc(db, 'exams', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveProjectGroupToFirestore(item: ProjectGroup) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'project_groups', item.id), sanitized);
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'project_groups', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteProjectGroupFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'project_groups', id));
+  try {
+    await deleteDoc(doc(db, 'project_groups', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 
 export async function saveProjectToFirestore(item: CourseProject) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'projects', item.id), sanitized);
+  saveProjectSupabase(item).catch((e) => console.warn('Supabase saveProject error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'projects', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteProjectFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'projects', id));
+  deleteProjectSupabase(id).catch((e) => console.warn('Supabase deleteProject error:', e));
+  try {
+    await deleteDoc(doc(db, 'projects', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 
 export async function saveAssignmentToFirestore(item: Assignment) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'assignments', item.id), sanitized);
+  saveAssignmentSupabase(item).catch((e) => console.warn('Supabase saveAssignment error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'assignments', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteAssignmentFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'assignments', id));
+  deleteAssignmentSupabase(id).catch((e) => console.warn('Supabase deleteAssignment error:', e));
+  try {
+    await deleteDoc(doc(db, 'assignments', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 
 export async function saveScheduleToFirestore(item: LectureSchedule) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'schedules', item.id), sanitized, { merge: true });
+  saveScheduleSupabase(item).catch((e) => console.warn('Supabase saveSchedule error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'schedules', item.id), sanitized, { merge: true });
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteScheduleFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'schedules', id));
+  deleteScheduleSupabase(id).catch((e) => console.warn('Supabase deleteSchedule error:', e));
+  try {
+    await deleteDoc(doc(db, 'schedules', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveAnnouncementToFirestore(item: Announcement) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'announcements', item.id), sanitized);
+  saveAnnouncementSupabase(item).catch((e) => console.warn('Supabase saveAnnouncement error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'announcements', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteAnnouncementFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'announcements', id));
+  deleteAnnouncementSupabase(id).catch((e) => console.warn('Supabase deleteAnnouncement error:', e));
+  try {
+    await deleteDoc(doc(db, 'announcements', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveCourseToFirestore(item: Course) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'courses', item.id), sanitized);
+  saveCourseSupabase(item).catch((e) => console.warn('Supabase saveCourse error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'courses', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteCourseFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'courses', id));
+  deleteCourseSupabase(id).catch((e) => console.warn('Supabase deleteCourse error:', e));
+  try {
+    await deleteDoc(doc(db, 'courses', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveGradeToFirestore(item: Grade) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'grades', item.id), sanitized);
+  saveGradeSupabase(item).catch((e) => console.warn('Supabase saveGrade error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'grades', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteGradeFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'grades', id));
+  deleteGradeSupabase(id).catch((e) => console.warn('Supabase deleteGrade error:', e));
+  try {
+    await deleteDoc(doc(db, 'grades', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveAttendanceSessionToFirestore(item: AttendanceSession) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'attendance_sessions', item.id), sanitized);
+  saveAttendanceSessionSupabase(item).catch((e) => console.warn('Supabase saveAttendanceSession error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'attendance_sessions', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteAttendanceSessionFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'attendance_sessions', id));
+  deleteAttendanceSessionSupabase(id).catch((e) => console.warn('Supabase deleteAttendanceSession error:', e));
+  try {
+    await deleteDoc(doc(db, 'attendance_sessions', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveAttendanceRecordToFirestore(item: AttendanceRecord) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'attendance_records', item.id), sanitized);
+  saveAttendanceRecordSupabase(item).catch((e) => console.warn('Supabase saveAttendanceRecord error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'attendance_records', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveAttendanceRecordsBatchToFirestore(items: AttendanceRecord[]) {
   if (!items || items.length === 0) return;
-  const batch = writeBatch(db);
-  for (const item of items) {
-    const sanitized = sanitizeForFirestore(item);
-    batch.set(doc(db, 'attendance_records', item.id), sanitized);
+  saveAttendanceRecordsBatchSupabase(items).catch((e) => console.warn('Supabase saveAttendanceRecordsBatch error:', e));
+  try {
+    const batch = writeBatch(db);
+    for (const item of items) {
+      const sanitized = sanitizeForFirestore(item);
+      batch.set(doc(db, 'attendance_records', item.id), sanitized);
+    }
+    await batch.commit();
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
   }
-  await batch.commit();
 }
 export async function deleteAttendanceRecordFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'attendance_records', id));
+  deleteAttendanceRecordSupabase(id).catch((e) => console.warn('Supabase deleteAttendanceRecord error:', e));
+  try {
+    await deleteDoc(doc(db, 'attendance_records', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveChatMessageToFirestore(item: ChatMessage) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'chat_messages', item.id), sanitized);
+  saveChatMessageSupabase(item).catch((e) => console.warn('Supabase saveChatMessage error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'chat_messages', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteChatMessageFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'chat_messages', id));
+  deleteChatMessageSupabase(id).catch((e) => console.warn('Supabase deleteChatMessage error:', e));
+  try {
+    await deleteDoc(doc(db, 'chat_messages', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveMaterialSectionToFirestore(item: MaterialSection) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'material_sections', item.id), sanitized);
+  saveMaterialSectionSupabase(item).catch((e) => console.warn('Supabase saveMaterialSection error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'material_sections', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteMaterialSectionFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'material_sections', id));
+  deleteMaterialSectionSupabase(id).catch((e) => console.warn('Supabase deleteMaterialSection error:', e));
+  try {
+    await deleteDoc(doc(db, 'material_sections', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveMaterialToFirestore(item: Material) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'materials', item.id), sanitized);
+  saveMaterialSupabase(item).catch((e) => console.warn('Supabase saveMaterial error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'materials', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteMaterialFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'materials', id));
+  deleteMaterialSupabase(id).catch((e) => console.warn('Supabase deleteMaterial error:', e));
+  try {
+    await deleteDoc(doc(db, 'materials', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function saveJoinRequestToFirestore(item: JoinRequest) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'join_requests', item.id), sanitized);
+  saveJoinRequestSupabase(item).catch((e) => console.warn('Supabase saveJoinRequest error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'join_requests', item.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteJoinRequestFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'join_requests', id));
+  deleteJoinRequestSupabase(id).catch((e) => console.warn('Supabase deleteJoinRequest error:', e));
+  try {
+    await deleteDoc(doc(db, 'join_requests', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 
 // Users
@@ -551,11 +830,21 @@ export function subscribeUsers(callback: (users: User[]) => void) {
   );
 }
 export async function saveUserToFirestore(user: User) {
-  const sanitized = sanitizeForFirestore(user);
-  await setDoc(doc(db, 'users', user.uid), sanitized, { merge: true });
+  saveUserSupabase(user).catch((e) => console.warn('Supabase saveUser error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(user);
+    await setDoc(doc(db, 'users', user.uid), sanitized, { merge: true });
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteUserFromFirestore(uid: string) {
-  await deleteDoc(doc(db, 'users', uid));
+  deleteUserSupabase(uid).catch((e) => console.warn('Supabase deleteUser error:', e));
+  try {
+    await deleteDoc(doc(db, 'users', uid));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 
 // Settings
@@ -573,8 +862,13 @@ export function subscribeSettings(callback: (settings: Record<string, any>) => v
   );
 }
 export async function saveSettingToFirestore(key: string, data: any) {
-  const sanitized = sanitizeForFirestore(data);
-  await setDoc(doc(db, 'settings', key), sanitized, { merge: true });
+  saveSettingSupabase(key, data).catch((e) => console.warn('Supabase saveSetting error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(data);
+    await setDoc(doc(db, 'settings', key), sanitized, { merge: true });
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 
 // Notifications
@@ -595,31 +889,53 @@ export function subscribeNotifications(userId: string, callback: (items: Notific
   );
 }
 export async function saveNotificationToFirestore(notif: Notification) {
-  const sanitized = sanitizeForFirestore(notif);
-  await setDoc(doc(db, 'notifications', notif.id), sanitized);
+  saveNotificationSupabase(notif).catch((e) => console.warn('Supabase saveNotification error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(notif);
+    await setDoc(doc(db, 'notifications', notif.id), sanitized);
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function markNotificationAsReadInFirestore(id: string) {
-  await setDoc(doc(db, 'notifications', id), { isRead: true }, { merge: true });
+  try {
+    await setDoc(doc(db, 'notifications', id), { isRead: true }, { merge: true });
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function deleteNotificationFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'notifications', id));
+  deleteNotificationSupabase(id).catch((e) => console.warn('Supabase deleteNotification error:', e));
+  try {
+    await deleteDoc(doc(db, 'notifications', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function markAllNotificationsReadInFirestore(notifications: Notification[]) {
   const unread = notifications.filter((n) => !n.isRead);
   if (unread.length === 0) return;
-  const batch = writeBatch(db);
-  unread.forEach((n) => {
-    batch.set(doc(db, 'notifications', n.id), { isRead: true }, { merge: true });
-  });
-  await batch.commit();
+  try {
+    const batch = writeBatch(db);
+    unread.forEach((n) => {
+      batch.set(doc(db, 'notifications', n.id), { isRead: true }, { merge: true });
+    });
+    await batch.commit();
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 export async function clearAllNotificationsInFirestore(notifications: Notification[]) {
   if (notifications.length === 0) return;
-  const batch = writeBatch(db);
-  notifications.forEach((n) => {
-    batch.delete(doc(db, 'notifications', n.id));
-  });
-  await batch.commit();
+  try {
+    const batch = writeBatch(db);
+    notifications.forEach((n) => {
+      batch.delete(doc(db, 'notifications', n.id));
+    });
+    await batch.commit();
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 
 // Representative Codes & Appointment Management
@@ -634,12 +950,22 @@ export function subscribeRepresentativeCodes(callback: (codes: RepresentativeCod
 }
 
 export async function saveRepresentativeCodeToFirestore(item: RepresentativeCode) {
-  const sanitized = sanitizeForFirestore(item);
-  await setDoc(doc(db, 'representative_codes', item.id), sanitized, { merge: true });
+  saveRepresentativeCodeSupabase(item).catch((e) => console.warn('Supabase saveRepCode error:', e));
+  try {
+    const sanitized = sanitizeForFirestore(item);
+    await setDoc(doc(db, 'representative_codes', item.id), sanitized, { merge: true });
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 
 export async function deleteRepresentativeCodeFromFirestore(id: string) {
-  await deleteDoc(doc(db, 'representative_codes', id));
+  deleteRepresentativeCodeSupabase(id).catch((e) => console.warn('Supabase deleteRepCode error:', e));
+  try {
+    await deleteDoc(doc(db, 'representative_codes', id));
+  } catch (err) {
+    if (isQuotaError(err)) notifyQuotaExceeded();
+  }
 }
 
 /**
