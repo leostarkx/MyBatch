@@ -184,6 +184,7 @@ export async function getUsersSupabase(batchCode?: string): Promise<User[]> {
     bookmarkedMaterialIds: u.bookmarked_material_ids || [],
     notificationPrefs: u.notification_prefs || undefined,
     assistantDuties: u.assistant_duties || undefined,
+    academicPoints: Number(u.academic_points || 0),
   }));
 }
 
@@ -209,8 +210,9 @@ export async function saveUserSupabase(user: User): Promise<void> {
     bookmarked_material_ids: user.bookmarkedMaterialIds,
     notification_prefs: user.notificationPrefs,
     assistant_duties: user.assistantDuties,
+    academic_points: user.academicPoints || 0,
   });
-  if (error) console.error('Error saving user to Supabase:', error);
+  if (error) logSupabaseError('saving user', error);
 }
 
 export async function deleteUserSupabase(uid: string): Promise<void> {

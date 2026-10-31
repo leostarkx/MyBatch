@@ -152,6 +152,7 @@ export interface User {
   bookmarkedMaterialIds?: string[];
   notificationPrefs?: NotificationPreferences;
   assistantDuties?: AssistantDuty[]; // الرتب والمهام الإدارية الموكلة للطالب
+  academicPoints?: number; // نقاط التفاعل والسمعة الأكاديمية للطالب
 }
 
 // Batch Instance Schema (النسخ والدفعات)
@@ -561,4 +562,37 @@ export interface RepresentativeCode {
   usedByName?: string;
   usedAt?: number;
   notes?: string;
+}
+
+// Academic Peer Q&A Forum Schema (منظومة الأسئلة والأجوبة الأكاديمية ونقاط التفاعل)
+export interface AcademicQuestion {
+  id: string;
+  batchCode: string;
+  courseId: string;
+  courseName: string;
+  authorUid: string;
+  authorName: string;
+  authorAvatar?: string;
+  title: string;
+  content: string;
+  tags?: string[];
+  imageUrl?: string;
+  answersCount: number;
+  acceptedAnswerId?: string;
+  upvotes: string[]; // قائمة معرفات الطلاب الذين صوتوا إيجابياً
+  createdAt: number;
+}
+
+export interface AcademicAnswer {
+  id: string;
+  questionId: string;
+  batchCode?: string;
+  authorUid: string;
+  authorName: string;
+  authorAvatar?: string;
+  content: string;
+  imageUrl?: string;
+  isAccepted: boolean;
+  upvotes: string[]; // قائمة معرفات الطلاب الذين صوتوا إيجابياً
+  createdAt: number;
 }

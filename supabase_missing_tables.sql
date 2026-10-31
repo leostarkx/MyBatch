@@ -99,11 +99,63 @@ ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Public access for settings" ON public.settings;
 CREATE POLICY "Public access for settings" ON public.settings FOR ALL USING (true) WITH CHECK (true);
 
--- تفعيل التحديث الحي (Realtime) على الإشعارات
+-- 6. إضافة عمود نقاط التفاعل الأكاديمية لجدول المستخدمين
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS academic_points INT DEFAULT 0;
+
+-- 7. جدول أسئلة واستفسارات المواد الأكاديمية (Academic Questions)
+CREATE TABLE IF NOT EXISTS public.academic_questions (
+    id TEXT PRIMARY KEY,
+    batch_code TEXT NOT NULL,
+    course_id TEXT NOT NULL,
+    course_name TEXT NOT NULL,
+    author_uid TEXT NOT NULL,
+    author_name TEXT NOT NULL,
+    author_avatar TEXT,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tags JSONB DEFAULT '[]'::jsonb,
+    image_url TEXT,
+    answers_count INT DEFAULT 0,
+    accepted_answer_id TEXT,
+    upvotes JSONB DEFAULT '[]'::jsonb,
+    created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
+);
+
+-- 8. جدول إجابات ومناقشات الأسئلة الأكاديمية (Academic Answers)
+CREATE TABLE IF NOT EXISTS public.academic_answers (
+    id TEXT PRIMARY KEY,
+    question_id TEXT NOT NULL,
+    batch_code TEXT,
+    author_uid TEXT NOT NULL,
+    author_name TEXT NOT NULL,
+    author_avatar TEXT,
+    content TEXT NOT NULL,
+    image_url TEXT,
+    is_accepted BOOLEAN DEFAULT FALSE,
+    upvotes JSONB DEFAULT '[]'::jsonb,
+    created_at BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000)::bigint
+);
+
+-- فهارس التسريع
+CREATE INDEX IF NOT EXISTS idx_academic_q_batch ON public.academic_questions(batch_code, course_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_academic_ans_q ON public.academic_answers(question_id, created_at);
+
+-- سياسات الأمان
+ALTER TABLE public.academic_questions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public access for academic_questions" ON public.academic_questions;
+CREATE POLICY "Public access for academic_questions" ON public.academic_questions FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.academic_answers ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public access for academic_answers" ON public.academic_answers;
+CREATE POLICY "Public access for academic_answers" ON public.academic_answers FOR ALL USING (true) WITH CHECK (true);
+
+-- تفعيل التحديث الحي (Realtime) على الإشعارات والأسئلة
 DO $$
 BEGIN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.notifications;
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.academic_questions;
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.academic_answers;
 EXCEPTION WHEN OTHERS THEN
-    -- إذا كان الجدول مضافاً مسبقاً أو الخاصية غير مفعلة
     NULL;
 END $$;
+

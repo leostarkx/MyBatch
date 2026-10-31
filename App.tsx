@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import Layout from "./components/Layout";
 import { BatchLogo } from "./components/BatchLogo";
 import { StudentAttendanceReportModal } from "./components/StudentAttendanceReportModal";
@@ -105,6 +105,7 @@ import {
   LogOut,
   CheckCircle,
   AlertCircle,
+  HelpCircle,
   FileText,
   Image as ImageIcon,
   Search,
@@ -198,6 +199,8 @@ import { deleteFileFromGoogleDrive } from "./services/googleDrive";
 import { GoogleDriveManagerModal } from "./components/GoogleDriveManagerModal";
 import { RepresentativeManagerModal } from "./components/RepresentativeManagerModal";
 import { LiveCountdownStrip } from "./components/LiveCountdownStrip";
+import { PDFViewerModal } from "./components/PDFViewerModal";
+import { AcademicQAHub } from "./components/AcademicQAHub";
 
 // --- Mock Data Imports ---
 import {
@@ -883,6 +886,22 @@ export default function App() {
   } | null>(null);
   const [resolvedPreviewUrl, setResolvedPreviewUrl] = useState<string>("");
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+
+  // In-App Interactive PDF Viewer Modal State
+  const [pdfViewerState, setPdfViewerState] = useState<{
+    isOpen: boolean;
+    url: string;
+    title: string;
+    courseName?: string;
+    fileSize?: string;
+  }>({
+    isOpen: false,
+    url: "",
+    title: "",
+  });
+
+  // Materials Sub-view: Lectures vs Questions Hub
+  const [materialsActiveSubTab, setMaterialsActiveSubTab] = useState<"LECTURES" | "QUESTIONS">("LECTURES");
 
   useEffect(() => {
     if (!previewItem) {
@@ -4609,6 +4628,41 @@ export default function App() {
     await deleteExamFromFirestore(id);
   };
 
+  const handleToggleAssignmentDoneById = useCallback(
+    async (id: string) => {
+      const a = assignments.find((x) => x.id === id);
+      if (a) await handleToggleAssignmentDone(a);
+    },
+    [assignments, handleToggleAssignmentDone]
+  );
+
+  // Memoized Home Selectors for lag-free rendering
+  const upcomingHomeAssignments = useMemo(() => {
+    return assignments
+      .slice()
+      .sort((a, b) => a.dueTimestamp - b.dueTimestamp)
+      .slice(0, 3);
+  }, [assignments]);
+
+  const sortedHomeAnnouncements = useMemo(() => {
+    return announcements
+      .slice()
+      .sort((a, b) => {
+        if (Boolean(a.isPinned) !== Boolean(b.isPinned)) {
+          return a.isPinned ? -1 : 1;
+        }
+        return b.timestamp - a.timestamp;
+      });
+  }, [announcements]);
+
+  const userNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (let i = 0; i < appUsers.length; i++) {
+      map.set(appUsers[i].uid, appUsers[i].name);
+    }
+    return map;
+  }, [appUsers]);
+
   // --- Views Copy/Paste from previous with minor adjustments if needed ---
   // The Render functions remain almost identical as they use the state variables which are now populated by Firebase
 
@@ -4647,10 +4701,7 @@ export default function App() {
           onNavigateTab={setActiveTab}
           onSaveExam={handleSaveExam}
           onDeleteExam={handleDeleteExam}
-          onToggleCompleteAssignment={async (id) => {
-            const a = assignments.find((x) => x.id === id);
-            if (a) await handleToggleAssignmentDone(a);
-          }}
+          onToggleCompleteAssignment={handleToggleAssignmentDoneById}
         />
 
         {/* Quick Competition & Leaderboard Banner on Home */}
@@ -4737,11 +4788,7 @@ export default function App() {
             </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {assignments
-                .slice()
-                .sort((a, b) => a.dueTimestamp - b.dueTimestamp)
-                .slice(0, 3)
-                .map((assign) => {
+              {upcomingHomeAssignments.map((assign) => {
                   const isDone = assign.completedBy?.includes(currentUser?.uid || "");
                   const timeInfo = getRemainingTimeInfo(assign.dueTimestamp);
 
@@ -4823,15 +4870,7 @@ export default function App() {
 
         {/* Announcements List (Pinned First) */}
         <div className="space-y-4">
-          {announcements
-            .slice()
-            .sort((a, b) => {
-              if (Boolean(a.isPinned) !== Boolean(b.isPinned)) {
-                return a.isPinned ? -1 : 1;
-              }
-              return b.timestamp - a.timestamp;
-            })
-            .map((ann) => {
+          {sortedHomeAnnouncements.map((ann) => {
               const totalPollVotes = ann.poll
                 ? ann.poll.options.reduce((acc, o) => acc + (o.votes?.length || 0), 0)
                 : 0;
@@ -4933,10 +4972,13 @@ export default function App() {
                             currentUser && opt.votes?.includes(currentUser.uid)
                           );
 
-                          const voterNames = (opt.votes || [])
-                            .map((uid) => appUsers.find((u) => u.uid === uid)?.name || "طالب")
-                            .filter(Boolean)
-                            .sort((a, b) => compareArabicNames(a, b));
+                          const voterNames =
+                            isShowingVoters && opt.votes && opt.votes.length > 0
+                              ? opt.votes
+                                  .map((uid) => userNameMap.get(uid) || "طالب")
+                                  .filter(Boolean)
+                                  .sort((a, b) => compareArabicNames(a, b))
+                              : [];
 
                           return (
                             <div key={opt.id} className="space-y-1">
@@ -5064,6 +5106,8 @@ export default function App() {
                           <img
                             src={ann.mediaUrl}
                             alt={ann.title}
+                            loading="lazy"
+                            decoding="async"
                             className="w-full h-auto max-h-96 object-cover group-hover:scale-[1.015] transition-transform duration-300"
                           />
                           <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
@@ -8942,10 +8986,37 @@ export default function App() {
             </div>
           </div>
 
-          {/* Action Buttons: Preview ONLY for images, direct download for documents/files */}
-          <div className={`grid ${mat.type === "IMAGE" ? "grid-cols-2" : "grid-cols-1"} gap-2 pt-3 border-t border-gray-100 dark:border-slate-700/60`}>
+          {/* Action Buttons: Embedded Preview for PDFs & Images, and Direct Download */}
+          <div
+            className={`grid ${
+              mat.type === "IMAGE" || mat.type === "PDF" || (mat.type === "LINK" && mat.url.toLowerCase().includes(".pdf"))
+                ? "grid-cols-2"
+                : "grid-cols-1"
+            } gap-2 pt-3 border-t border-gray-100 dark:border-slate-700/60`}
+          >
+            {mat.type === "PDF" && (
+              <button
+                type="button"
+                onClick={() =>
+                  setPdfViewerState({
+                    isOpen: true,
+                    url: mat.url,
+                    title: mat.title,
+                    courseName: matCourse?.name,
+                    fileSize: mat.fileSize,
+                  })
+                }
+                className="flex items-center justify-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 py-2.5 px-3 rounded-2xl text-xs font-bold transition active:scale-95 cursor-pointer"
+                title="معاينة وقراءة المحاضرة داخل التطبيق مباشرة"
+              >
+                <Eye size={15} />
+                <span>معاينة مدمجة</span>
+              </button>
+            )}
+
             {mat.type === "IMAGE" && (
               <button
+                type="button"
                 onClick={() =>
                   setPreviewItem({
                     title: mat.title,
@@ -8954,7 +9025,7 @@ export default function App() {
                     date: mat.uploadDate,
                   })
                 }
-                className="flex items-center justify-center gap-1.5 bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-light py-2.5 px-3 rounded-2xl text-xs font-bold transition active:scale-95"
+                className="flex items-center justify-center gap-1.5 bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-light py-2.5 px-3 rounded-2xl text-xs font-bold transition active:scale-95 cursor-pointer"
                 title="معاينة الصورة داخل التطبيق"
               >
                 <Eye size={15} />
@@ -8966,19 +9037,40 @@ export default function App() {
             mat.url.startsWith("http") &&
             !mat.url.includes("cloudinary.com") &&
             !mat.url.startsWith("dafaaty-cloud://") ? (
-              <a
-                href={mat.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center justify-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white py-2.5 px-3 rounded-2xl text-xs font-bold shadow-md shadow-emerald-500/20 transition active:scale-95"
-              >
-                <ExternalLink size={15} />
-                <span>فتح الرابط</span>
-              </a>
+              <div className="flex items-center gap-2 w-full">
+                {mat.url.toLowerCase().includes(".pdf") && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPdfViewerState({
+                        isOpen: true,
+                        url: mat.url,
+                        title: mat.title,
+                        courseName: matCourse?.name,
+                        fileSize: mat.fileSize,
+                      })
+                    }
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 py-2.5 px-3 rounded-2xl text-xs font-bold transition cursor-pointer"
+                  >
+                    <Eye size={15} />
+                    <span>معاينة</span>
+                  </button>
+                )}
+                <a
+                  href={mat.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white py-2.5 px-3 rounded-2xl text-xs font-bold shadow-md shadow-emerald-500/20 transition active:scale-95"
+                >
+                  <ExternalLink size={15} />
+                  <span>فتح الرابط</span>
+                </a>
+              </div>
             ) : (
               <button
+                type="button"
                 onClick={() => handleDownloadMaterial(mat)}
-                className="flex items-center justify-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white py-2.5 px-3 rounded-2xl text-xs font-bold shadow-md shadow-emerald-500/20 transition active:scale-95"
+                className="flex items-center justify-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white py-2.5 px-3 rounded-2xl text-xs font-bold shadow-md shadow-emerald-500/20 transition active:scale-95 cursor-pointer"
                 title="تنزيل الملف بصيغته الأصلية إلى جهازك"
               >
                 <Download size={15} />
@@ -9566,7 +9658,44 @@ export default function App() {
     // Default: List Courses + Global Search & Filter Bar
     return (
       <div className="space-y-6 p-4 animate-in fade-in duration-300">
-        <div className="bg-gradient-to-r from-amber-500 to-orange-500 rounded-3xl p-6 text-white shadow-xl shadow-amber-200 relative overflow-hidden flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+        {/* Sub-view Switcher: Lectures vs Subject Q&A Hub */}
+        <div className="flex items-center gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl w-fit">
+          <button
+            type="button"
+            onClick={() => setMaterialsActiveSubTab("LECTURES")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
+              materialsActiveSubTab === "LECTURES"
+                ? "bg-white dark:bg-slate-700 text-amber-600 dark:text-amber-400 shadow-sm"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+            }`}
+          >
+            <BookOpen size={16} />
+            <span>المحاضرات والملازم الدراسية</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setMaterialsActiveSubTab("QUESTIONS")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
+              materialsActiveSubTab === "QUESTIONS"
+                ? "bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+            }`}
+          >
+            <HelpCircle size={16} />
+            <span>بنك أسئلة واستفسارات المواد 💡</span>
+          </button>
+        </div>
+
+        {materialsActiveSubTab === "QUESTIONS" ? (
+          <AcademicQAHub
+            batchCode={currentBatchObj?.code || effectiveBatchCode || "CS-2024"}
+            courses={courses}
+            currentUser={currentUser!}
+            allUsers={appUsers}
+          />
+        ) : (
+          <>
+            <div className="bg-gradient-to-r from-amber-500 to-orange-500 rounded-3xl p-6 text-white shadow-xl shadow-amber-200 relative overflow-hidden flex flex-col sm:flex-row justify-between sm:items-center gap-4">
           <div className="relative z-10">
             <h2 className="text-2xl font-bold mb-1.5 flex items-center gap-2">
               <BookOpen size={28} />
@@ -9787,6 +9916,8 @@ export default function App() {
               </div>
             )}
           </div>
+        )}
+          </>
         )}
       </div>
     );
@@ -15339,6 +15470,16 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* In-App Interactive PDF Viewer Modal */}
+      <PDFViewerModal
+        isOpen={pdfViewerState.isOpen}
+        onClose={() => setPdfViewerState((prev) => ({ ...prev, isOpen: false }))}
+        url={pdfViewerState.url}
+        title={pdfViewerState.title}
+        courseName={pdfViewerState.courseName}
+        fileSize={pdfViewerState.fileSize}
+      />
 
       {/* Modal: Redeem Representative Code */}
       {isRedeemRepCodeOpen && (

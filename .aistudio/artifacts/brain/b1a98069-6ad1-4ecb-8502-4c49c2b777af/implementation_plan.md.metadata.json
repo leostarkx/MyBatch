@@ -1,6 +1,6 @@
 {
-  "summary":  "Comprehensive architectural plan to migrate from Firebase Firestore to Cloud SQL PostgreSQL with automated zero-data-loss data migration, Drizzle ORM, Express server, and complete schema mapping.",
-  "updatedAt":  "2026-10-29T04:43:27.590421457Z",
+  "summary":  "خطة شاملة لتطوير منصة دفعتي (Dafaaty):\n1. نظام الأسئلة والأجوبة الأكاديمية التفاعلي (Peer Q&A Hub) المخصص لكل مادة مع نظام نقاط السمعة والتفاعل (Academic Points & Badges) للسائل والمجيب.\n2. تطوير قسم المحاضرات والملازم مع عارض PDF تفاعلي مدمج فائق السرعة، ومعاينة مباشرة، وتنزيل فوري، ونسب إنجاز الدراسة للمواد.",
+  "updatedAt":  "2026-10-31T07:59:39.977906499Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

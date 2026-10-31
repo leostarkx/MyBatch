@@ -73,7 +73,7 @@ const TelegramSpoiler: React.FC<{ children: React.ReactNode }> = ({ children }) 
   );
 };
 
-export const FormattedTextRenderer: React.FC<FormattedTextRendererProps> = ({
+export const FormattedTextRenderer: React.FC<FormattedTextRendererProps> = React.memo(({
   content,
   className = "",
   compact = false,
@@ -601,6 +601,6 @@ export const FormattedTextRenderer: React.FC<FormattedTextRendererProps> = ({
       })}
     </div>
   );
-};
+});
 
 export default FormattedTextRenderer;

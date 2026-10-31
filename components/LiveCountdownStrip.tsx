@@ -52,7 +52,223 @@ export interface DeadlineItem {
   originalItem: Assignment | Exam | CourseProject;
 }
 
-export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
+// 1. Isolated leaf timer: ONLY this leaf ticks every second to update the 4 digits
+const DigitalCountdownDisplay = React.memo(({
+  targetTimestamp,
+  isVeryUrgent,
+}: {
+  targetTimestamp: number;
+  isVeryUrgent: boolean;
+}) => {
+  const [diff, setDiff] = useState(() => targetTimestamp - Date.now());
+
+  useEffect(() => {
+    if (diff <= -60000) return;
+    const interval = setInterval(() => {
+      setDiff(targetTimestamp - Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [targetTimestamp, diff <= -60000]);
+
+  if (diff <= 0) {
+    return (
+      <div className="py-2 text-center text-xs font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/20 rounded-2xl">
+        انتهى موعد التسليم / الامتحان
+      </div>
+    );
+  }
+
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
+  const minutes = Math.floor((diff / 1000 / 60) % 60);
+  const seconds = Math.floor((diff / 1000) % 60);
+
+  return (
+    <div className="grid grid-cols-4 gap-1.5 text-center">
+      {/* Days */}
+      <div className="bg-gray-50 dark:bg-slate-700/60 p-2 rounded-2xl border border-gray-100 dark:border-slate-600">
+        <div className="text-base sm:text-lg font-black font-mono text-gray-800 dark:text-white tracking-tight">
+          {String(days).padStart(2, '0')}
+        </div>
+        <div className="text-[9px] font-bold text-gray-400 uppercase">يوم</div>
+      </div>
+
+      {/* Hours */}
+      <div
+        className={`p-2 rounded-2xl border ${
+          isVeryUrgent
+            ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-300'
+            : 'bg-gray-50 dark:bg-slate-700/60 border-gray-100 dark:border-slate-600 text-gray-800 dark:text-white'
+        }`}
+      >
+        <div className="text-base sm:text-lg font-black font-mono tracking-tight">
+          {String(hours).padStart(2, '0')}
+        </div>
+        <div className="text-[9px] font-bold opacity-75 uppercase">ساعة</div>
+      </div>
+
+      {/* Minutes */}
+      <div
+        className={`p-2 rounded-2xl border ${
+          isVeryUrgent
+            ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-300'
+            : 'bg-gray-50 dark:bg-slate-700/60 border-gray-100 dark:border-slate-600 text-gray-800 dark:text-white'
+        }`}
+      >
+        <div className="text-base sm:text-lg font-black font-mono tracking-tight">
+          {String(minutes).padStart(2, '0')}
+        </div>
+        <div className="text-[9px] font-bold opacity-75 uppercase">دقيقة</div>
+      </div>
+
+      {/* Seconds */}
+      <div className="bg-orange-50 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-900/40 p-2 rounded-2xl text-orange-600 dark:text-orange-400">
+        <div className="text-base sm:text-lg font-black font-mono tracking-tight animate-pulse">
+          {String(seconds).padStart(2, '0')}
+        </div>
+        <div className="text-[9px] font-bold uppercase">ثانية</div>
+      </div>
+    </div>
+  );
+});
+
+// 2. Memoized Card: Doesn't re-render on ticking, only when props or coarse currentTime change
+const DeadlineCard = React.memo(({
+  item,
+  currentTime,
+  onCardClick,
+  onToggleCompleteAssignment,
+}: {
+  item: DeadlineItem;
+  currentTime: number;
+  onCardClick: (item: DeadlineItem) => void;
+  onToggleCompleteAssignment?: (assignmentId: string) => Promise<void>;
+}) => {
+  const diff = item.timestamp - currentTime;
+  const isOverdue = diff <= 0;
+  const isVeryUrgent = !isOverdue && diff < 24 * 60 * 60 * 1000;
+
+  const typeConfig = {
+    EXAM: {
+      label:
+        item.examType === 'FINAL'
+          ? 'امتحان نهائي 🏆'
+          : item.examType === 'MIDTERM'
+          ? 'امتحان نصفي 📜'
+          : item.examType === 'PRACTICAL'
+          ? 'امتحان عملي 🧪'
+          : 'كويز سريع 📝',
+      border: isVeryUrgent ? 'border-red-400' : 'border-purple-200 dark:border-purple-900/40',
+      badgeBg: 'bg-purple-100 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300',
+      glow: 'hover:shadow-purple-500/10',
+    },
+    ASSIGNMENT: {
+      label: 'واجب دراسي 📝',
+      border: isVeryUrgent ? 'border-red-400' : 'border-blue-200 dark:border-blue-900/40',
+      badgeBg: 'bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300',
+      glow: 'hover:shadow-blue-500/10',
+    },
+    PROJECT: {
+      label: 'مشروع فصلي 💼',
+      border: isVeryUrgent ? 'border-red-400' : 'border-emerald-200 dark:border-emerald-900/40',
+      badgeBg: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300',
+      glow: 'hover:shadow-emerald-500/10',
+    },
+  }[item.sourceType];
+
+  return (
+    <div
+      onClick={() => onCardClick(item)}
+      className={`p-4 sm:p-5 rounded-3xl bg-white dark:bg-slate-800 border ${typeConfig.border} shadow-sm hover:shadow-md transition-all flex flex-col justify-between cursor-pointer relative overflow-hidden group ${typeConfig.glow}`}
+    >
+      {/* Status indicator bar on top */}
+      {isVeryUrgent && (
+        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-red-500 via-rose-500 to-orange-500 animate-pulse" />
+      )}
+
+      <div>
+        {/* Top Tags */}
+        <div className="flex items-center justify-between gap-2 mb-2.5">
+          <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full ${typeConfig.badgeBg}`}>
+            {typeConfig.label}
+          </span>
+
+          {item.isCompleted ? (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 flex items-center gap-1">
+              <CheckCircle2 size={11} />
+              تم التسليم
+            </span>
+          ) : isOverdue ? (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300 flex items-center gap-1">
+              <AlertTriangle size={11} />
+              انتهى الموعد
+            </span>
+          ) : isVeryUrgent ? (
+            <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-red-500 text-white flex items-center gap-1 animate-pulse shadow-sm">
+              <Flame size={11} />
+              أقل من 24 ساعة!
+            </span>
+          ) : (
+            <span className="text-[10px] font-bold text-gray-400 flex items-center gap-1">
+              <Calendar size={11} />
+              {new Date(item.timestamp).toLocaleDateString('ar-IQ', { month: 'short', day: 'numeric' })}
+            </span>
+          )}
+        </div>
+
+        {/* Title and Course */}
+        <h3 className="font-bold text-gray-800 dark:text-white text-base leading-snug group-hover:text-primary transition line-clamp-1">
+          {item.title}
+        </h3>
+
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 flex items-center gap-1.5 font-medium">
+          <BookOpen size={13} className="text-gray-400" />
+          <span>{item.courseName}</span>
+          {item.hall && (
+            <>
+              <span>•</span>
+              <span className="text-purple-600 dark:text-purple-400 font-bold flex items-center gap-0.5">
+                <MapPin size={11} />
+                {item.hall}
+              </span>
+            </>
+          )}
+        </p>
+      </div>
+
+      {/* Digital Live Countdown Boxes */}
+      <div className="mt-4 pt-3.5 border-t border-gray-100 dark:border-slate-700/80">
+        <DigitalCountdownDisplay targetTimestamp={item.timestamp} isVeryUrgent={isVeryUrgent} />
+
+        <div className="flex items-center justify-between text-[11px] text-gray-400 mt-2 px-1">
+          <span className="flex items-center gap-1 text-primary group-hover:underline font-bold">
+            <span>عرض التفاصيل</span>
+            <ChevronLeft size={13} />
+          </span>
+
+          {item.sourceType === 'ASSIGNMENT' && onToggleCompleteAssignment && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleCompleteAssignment((item.originalItem as Assignment).id);
+              }}
+              className={`px-2 py-0.5 rounded-lg font-bold text-[10px] transition ${
+                item.isCompleted
+                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
+                  : 'bg-gray-100 hover:bg-gray-200 dark:bg-slate-700 text-gray-600 dark:text-gray-300'
+              }`}
+            >
+              {item.isCompleted ? '✓ مكتمل' : 'تحديد كمكتمل'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = React.memo(({
   assignments,
   projects,
   exams,
@@ -85,11 +301,11 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
   const [examTopics, setExamTopics] = useState('');
   const [isSavingExam, setIsSavingExam] = useState(false);
 
-  // Real-time tick every second
+  // Coarse tick every 30 seconds for categories and statistics (instead of heavy 1-sec full re-renders)
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(Date.now());
-    }, 1000);
+    }, 30000);
     return () => clearInterval(timer);
   }, []);
 
@@ -585,183 +801,15 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-          {filtered.map((item) => {
-            const countdown = getRemainingTime(item.timestamp);
-            const isVeryUrgent = !countdown.isOverdue && countdown.days === 0 && countdown.hours < 24;
-
-            // Type styling
-            const typeConfig = {
-              EXAM: {
-                label:
-                  item.examType === 'FINAL'
-                    ? 'امتحان نهائي 🏆'
-                    : item.examType === 'MIDTERM'
-                    ? 'امتحان نصفي 📜'
-                    : item.examType === 'PRACTICAL'
-                    ? 'امتحان عملي 🧪'
-                    : 'كويز سريع 📝',
-                border: isVeryUrgent ? 'border-red-400' : 'border-purple-200 dark:border-purple-900/40',
-                badgeBg: 'bg-purple-100 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300',
-                glow: 'hover:shadow-purple-500/10',
-              },
-              ASSIGNMENT: {
-                label: 'واجب دراسي 📝',
-                border: isVeryUrgent ? 'border-red-400' : 'border-blue-200 dark:border-blue-900/40',
-                badgeBg: 'bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300',
-                glow: 'hover:shadow-blue-500/10',
-              },
-              PROJECT: {
-                label: 'مشروع فصلي 💼',
-                border: isVeryUrgent ? 'border-red-400' : 'border-emerald-200 dark:border-emerald-900/40',
-                badgeBg: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300',
-                glow: 'hover:shadow-emerald-500/10',
-              },
-            }[item.sourceType];
-
-            return (
-              <div
-                key={item.id}
-                onClick={() => handleCardClick(item)}
-                className={`p-4 sm:p-5 rounded-3xl bg-white dark:bg-slate-800 border ${typeConfig.border} shadow-sm hover:shadow-md transition-all flex flex-col justify-between cursor-pointer relative overflow-hidden group ${typeConfig.glow}`}
-              >
-                {/* Status indicator bar on top */}
-                {isVeryUrgent && (
-                  <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-red-500 via-rose-500 to-orange-500 animate-pulse" />
-                )}
-
-                <div>
-                  {/* Top Tags */}
-                  <div className="flex items-center justify-between gap-2 mb-2.5">
-                    <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full ${typeConfig.badgeBg}`}>
-                      {typeConfig.label}
-                    </span>
-
-                    {item.isCompleted ? (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 flex items-center gap-1">
-                        <CheckCircle2 size={11} />
-                        تم التسليم
-                      </span>
-                    ) : countdown.isOverdue ? (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300 flex items-center gap-1">
-                        <AlertTriangle size={11} />
-                        انتهى الموعد
-                      </span>
-                    ) : isVeryUrgent ? (
-                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-red-500 text-white flex items-center gap-1 animate-pulse shadow-sm">
-                        <Flame size={11} />
-                        أقل من 24 ساعة!
-                      </span>
-                    ) : (
-                      <span className="text-[10px] font-bold text-gray-400 flex items-center gap-1">
-                        <Calendar size={11} />
-                        {new Date(item.timestamp).toLocaleDateString('ar-IQ', { month: 'short', day: 'numeric' })}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Title and Course */}
-                  <h3 className="font-bold text-gray-800 dark:text-white text-base leading-snug group-hover:text-primary transition line-clamp-1">
-                    {item.title}
-                  </h3>
-
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 flex items-center gap-1.5 font-medium">
-                    <BookOpen size={13} className="text-gray-400" />
-                    <span>{item.courseName}</span>
-                    {item.hall && (
-                      <>
-                        <span>•</span>
-                        <span className="text-purple-600 dark:text-purple-400 font-bold flex items-center gap-0.5">
-                          <MapPin size={11} />
-                          {item.hall}
-                        </span>
-                      </>
-                    )}
-                  </p>
-                </div>
-
-                {/* Digital Live Countdown Boxes */}
-                <div className="mt-4 pt-3.5 border-t border-gray-100 dark:border-slate-700/80">
-                  {countdown.isOverdue ? (
-                    <div className="py-2 text-center text-xs font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/20 rounded-2xl">
-                      انتهى موعد التسليم / الامتحان
-                    </div>
-                  ) : (
-                    <div>
-                      <div className="grid grid-cols-4 gap-1.5 text-center">
-                        {/* Days */}
-                        <div className="bg-gray-50 dark:bg-slate-700/60 p-2 rounded-2xl border border-gray-100 dark:border-slate-600">
-                          <div className="text-base sm:text-lg font-black font-mono text-gray-800 dark:text-white tracking-tight">
-                            {String(countdown.days).padStart(2, '0')}
-                          </div>
-                          <div className="text-[9px] font-bold text-gray-400 uppercase">يوم</div>
-                        </div>
-
-                        {/* Hours */}
-                        <div
-                          className={`p-2 rounded-2xl border ${
-                            isVeryUrgent
-                              ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-300'
-                              : 'bg-gray-50 dark:bg-slate-700/60 border-gray-100 dark:border-slate-600 text-gray-800 dark:text-white'
-                          }`}
-                        >
-                          <div className="text-base sm:text-lg font-black font-mono tracking-tight">
-                            {String(countdown.hours).padStart(2, '0')}
-                          </div>
-                          <div className="text-[9px] font-bold opacity-75 uppercase">ساعة</div>
-                        </div>
-
-                        {/* Minutes */}
-                        <div
-                          className={`p-2 rounded-2xl border ${
-                            isVeryUrgent
-                              ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-300'
-                              : 'bg-gray-50 dark:bg-slate-700/60 border-gray-100 dark:border-slate-600 text-gray-800 dark:text-white'
-                          }`}
-                        >
-                          <div className="text-base sm:text-lg font-black font-mono tracking-tight">
-                            {String(countdown.minutes).padStart(2, '0')}
-                          </div>
-                          <div className="text-[9px] font-bold opacity-75 uppercase">دقيقة</div>
-                        </div>
-
-                        {/* Seconds */}
-                        <div className="bg-orange-50 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-900/40 p-2 rounded-2xl text-orange-600 dark:text-orange-400">
-                          <div className="text-base sm:text-lg font-black font-mono tracking-tight animate-pulse">
-                            {String(countdown.seconds).padStart(2, '0')}
-                          </div>
-                          <div className="text-[9px] font-bold uppercase">ثانية</div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between text-[11px] text-gray-400 mt-2 px-1">
-                        <span className="flex items-center gap-1 text-primary group-hover:underline font-bold">
-                          <span>عرض التفاصيل</span>
-                          <ChevronLeft size={13} />
-                        </span>
-
-                        {item.sourceType === 'ASSIGNMENT' && onToggleCompleteAssignment && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onToggleCompleteAssignment((item.originalItem as Assignment).id);
-                            }}
-                            className={`px-2 py-0.5 rounded-lg font-bold text-[10px] transition ${
-                              item.isCompleted
-                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
-                                : 'bg-gray-100 hover:bg-gray-200 dark:bg-slate-700 text-gray-600 dark:text-gray-300'
-                            }`}
-                          >
-                            {item.isCompleted ? '✓ مكتمل' : 'تحديد كمكتمل'}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          {filtered.map((item) => (
+            <DeadlineCard
+              key={item.id}
+              item={item}
+              currentTime={currentTime}
+              onCardClick={handleCardClick}
+              onToggleCompleteAssignment={onToggleCompleteAssignment}
+            />
+          ))}
         </div>
       )}
 
@@ -1013,6 +1061,6 @@ export const LiveCountdownStrip: React.FC<LiveCountdownStripProps> = ({
       )}
     </div>
   );
-};
+});
 
 export default LiveCountdownStrip;
