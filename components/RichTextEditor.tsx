@@ -1987,21 +1987,44 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           </div>
         )}
 
-        {/* Quick Selection Floating Toolbar */}
-        {activeTab === 'write' && hasSelection && (
-          <div className="bg-primary/10 dark:bg-primary/20 border-b border-primary/20 px-3 py-1.5 flex items-center gap-2 flex-wrap text-xs animate-in fade-in duration-150">
-            <span className="text-[10px] font-black text-primary flex items-center gap-1">
-              <span>✍️ تنسيق المحدد:</span>
-              <span className="text-gray-500 font-normal">«{selectedTextSnippet.slice(0, 16)}...»</span>
-            </span>
-            <div className="flex items-center gap-1">
+        {/* Permanently Fixed Quick Formatting & Selection Sub-Toolbar (Zero Layout Shift) */}
+        {activeTab === 'write' && (
+          <div
+            className={`border-b px-3 py-1.5 flex items-center justify-between gap-2 flex-wrap text-xs transition-colors duration-200 min-h-[40px] ${
+              hasSelection
+                ? 'bg-blue-50/80 dark:bg-blue-950/30 border-blue-200/80 dark:border-blue-900/50'
+                : 'bg-gray-50/90 dark:bg-slate-800/60 border-gray-100 dark:border-slate-700/60'
+            }`}
+          >
+            {/* Status / Snippet / Gentle Guidance Indicator */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              {hasSelection ? (
+                <span className="text-[11px] font-bold text-primary flex items-center gap-1.5 truncate">
+                  <span className="shrink-0">✍️ تنسيق المحدد:</span>
+                  <span className="font-mono text-gray-600 dark:text-gray-300 bg-white/80 dark:bg-slate-800 px-1.5 py-0.5 rounded border border-primary/20 text-[10px] max-w-[140px] sm:max-w-[200px] truncate">
+                    «{selectedTextSnippet || 'نص محدد'}»
+                  </span>
+                </span>
+              ) : (
+                <span className="text-[11px] text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
+                  <span className="text-amber-500 shrink-0">💡</span>
+                  <span className="font-medium">حدد أي كلمة أو نص لتطبيق تنسيق فوري وسريع عليه</span>
+                </span>
+              )}
+            </div>
+
+            {/* Quick Format Action Buttons */}
+            <div className="flex items-center gap-1 flex-wrap">
               {/* Quick convert to normal text (P) */}
               <button
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => convertBlockTo('p')}
+                disabled={!hasSelection}
                 className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition shadow-xs flex items-center gap-1 ${
-                  activeFormats.block === 'p' || !activeFormats.block
+                  !hasSelection
+                    ? 'opacity-60 cursor-not-allowed bg-white/60 dark:bg-slate-800/40 text-gray-400'
+                    : (activeFormats.block === 'p' || !activeFormats.block)
                     ? 'bg-primary text-white'
                     : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-white hover:bg-primary/20'
                 }`}
@@ -2016,8 +2039,11 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => convertBlockTo('h1')}
+                disabled={!hasSelection}
                 className={`px-2 py-0.5 rounded-md text-[11px] font-black transition shadow-xs ${
-                  activeFormats.block === 'h1'
+                  !hasSelection
+                    ? 'opacity-60 cursor-not-allowed bg-white/60 dark:bg-slate-800/40 text-gray-400'
+                    : activeFormats.block === 'h1'
                     ? 'bg-primary text-white'
                     : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-white hover:bg-primary/20'
                 }`}
@@ -2031,8 +2057,11 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => convertBlockTo('h2')}
+                disabled={!hasSelection}
                 className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition shadow-xs ${
-                  activeFormats.block === 'h2'
+                  !hasSelection
+                    ? 'opacity-60 cursor-not-allowed bg-white/60 dark:bg-slate-800/40 text-gray-400'
+                    : activeFormats.block === 'h2'
                     ? 'bg-primary text-white'
                     : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-white hover:bg-primary/20'
                 }`}
@@ -2046,8 +2075,11 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={toggleBlockquote}
+                disabled={!hasSelection}
                 className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition shadow-xs flex items-center gap-1 ${
-                  activeFormats.block === 'blockquote'
+                  !hasSelection
+                    ? 'opacity-60 cursor-not-allowed bg-white/60 dark:bg-slate-800/40 text-gray-400'
+                    : activeFormats.block === 'blockquote'
                     ? 'bg-primary text-white'
                     : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-white hover:bg-primary/20'
                 }`}
@@ -2057,14 +2089,17 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 <span>اقتباس</span>
               </button>
 
-              <span className="w-px h-3.5 bg-primary/20 mx-0.5" />
+              <span className="w-px h-3.5 bg-gray-300 dark:bg-slate-600 mx-0.5" />
 
               <button
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => execCmd('bold')}
+                disabled={!hasSelection}
                 className={`px-2 py-0.5 rounded-md text-xs font-black transition shadow-xs ${
-                  activeFormats.bold
+                  !hasSelection
+                    ? 'opacity-60 cursor-not-allowed bg-white/60 dark:bg-slate-800/40 text-gray-400'
+                    : activeFormats.bold
                     ? 'bg-primary text-white'
                     : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-white hover:bg-primary hover:text-white'
                 }`}
@@ -2076,8 +2111,11 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => execCmd('italic')}
+                disabled={!hasSelection}
                 className={`px-2 py-0.5 rounded-md text-xs italic transition shadow-xs ${
-                  activeFormats.italic
+                  !hasSelection
+                    ? 'opacity-60 cursor-not-allowed bg-white/60 dark:bg-slate-800/40 text-gray-400'
+                    : activeFormats.italic
                     ? 'bg-primary text-white'
                     : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-white hover:bg-primary hover:text-white'
                 }`}
@@ -2089,8 +2127,11 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => execCmd('underline')}
+                disabled={!hasSelection}
                 className={`px-2 py-0.5 rounded-md text-xs underline transition shadow-xs ${
-                  activeFormats.underline
+                  !hasSelection
+                    ? 'opacity-60 cursor-not-allowed bg-white/60 dark:bg-slate-800/40 text-gray-400'
+                    : activeFormats.underline
                     ? 'bg-primary text-white'
                     : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-white hover:bg-primary hover:text-white'
                 }`}
@@ -2102,8 +2143,11 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => execCmd('strikeThrough')}
+                disabled={!hasSelection}
                 className={`px-2 py-0.5 rounded-md text-xs line-through transition shadow-xs ${
-                  activeFormats.strikeThrough
+                  !hasSelection
+                    ? 'opacity-60 cursor-not-allowed bg-white/60 dark:bg-slate-800/40 text-gray-400'
+                    : activeFormats.strikeThrough
                     ? 'bg-primary text-white'
                     : 'bg-white dark:bg-slate-800 text-gray-800 dark:text-white hover:bg-primary hover:text-white'
                 }`}
@@ -2115,7 +2159,10 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={applyTelegramSpoiler}
-                className="px-2 py-0.5 rounded-md bg-slate-700 text-white hover:bg-slate-900 transition shadow-xs text-[10px] font-bold flex items-center gap-0.5"
+                disabled={!hasSelection}
+                className={`px-2 py-0.5 rounded-md bg-slate-700 text-white hover:bg-slate-900 transition shadow-xs text-[10px] font-bold flex items-center gap-0.5 ${
+                  !hasSelection ? 'opacity-60 cursor-not-allowed' : ''
+                }`}
                 title="سبويلر"
               >
                 <Eye size={11} className="text-yellow-300" />
@@ -2125,7 +2172,10 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => applyTextColor('#dc2626')}
-                className="w-5 h-5 rounded-md bg-red-600 text-white flex items-center justify-center font-bold text-[10px]"
+                disabled={!hasSelection}
+                className={`w-5 h-5 rounded-md bg-red-600 text-white flex items-center justify-center font-bold text-[10px] transition ${
+                  !hasSelection ? 'opacity-60 cursor-not-allowed' : 'hover:scale-105 active:scale-95'
+                }`}
                 title="أحمر"
               >
                 A
@@ -2134,7 +2184,10 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => applyTextColor('#2563eb')}
-                className="w-5 h-5 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold text-[10px]"
+                disabled={!hasSelection}
+                className={`w-5 h-5 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold text-[10px] transition ${
+                  !hasSelection ? 'opacity-60 cursor-not-allowed' : 'hover:scale-105 active:scale-95'
+                }`}
                 title="أزرق"
               >
                 A
@@ -2143,7 +2196,10 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => applyMarkerColor('#fef08a')}
-                className="w-5 h-5 rounded-md bg-yellow-300 text-yellow-950 flex items-center justify-center font-bold text-[10px]"
+                disabled={!hasSelection}
+                className={`w-5 h-5 rounded-md bg-yellow-300 text-yellow-950 flex items-center justify-center font-bold text-[10px] transition ${
+                  !hasSelection ? 'opacity-60 cursor-not-allowed' : 'hover:scale-105 active:scale-95'
+                }`}
                 title="ماركر أصفر"
               >
                 H
@@ -2153,7 +2209,10 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={handleClearFormat}
-                className="p-1 rounded-md bg-white dark:bg-slate-800 text-gray-500 hover:text-red-500 transition shadow-xs"
+                disabled={!hasSelection}
+                className={`p-1 rounded-md bg-white dark:bg-slate-800 text-gray-500 hover:text-red-500 transition shadow-xs ${
+                  !hasSelection ? 'opacity-60 cursor-not-allowed' : ''
+                }`}
                 title="إزالة كافة التنسيقات والعودة لنص عادي"
               >
                 <RemoveFormatting size={12} />

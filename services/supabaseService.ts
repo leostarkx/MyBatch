@@ -403,22 +403,47 @@ export async function getExamsSupabase(batchCode: string): Promise<Exam[]> {
     .eq('batch_code', batchCode)
     .order('exam_timestamp', { ascending: true });
   if (error) return [];
-  return (data || []).map((e) => ({
-    id: e.id,
-    batchCode: e.batch_code,
-    title: e.title,
-    courseId: e.course_id || '',
-    courseName: e.course_name || '',
-    examDate: e.exam_date,
-    examTimestamp: Number(e.exam_timestamp),
-    hall: e.location || undefined,
-    topics: e.material_covered || undefined,
-    type: (e.type || 'QUIZ') as any,
-    createdAt: Number(e.created_at),
-  }));
+  return (data || []).map((e) => {
+    let cleanNotes = e.notes || undefined;
+    let maxScore = 10;
+    let isResultsPublished = false;
+    if (e.notes && e.notes.includes('__MAXSCORE:')) {
+      const matchMax = e.notes.match(/__MAXSCORE:(\d+(\.\d+)?)__/);
+      if (matchMax) maxScore = Number(matchMax[1]);
+      const matchPub = e.notes.match(/__PUBLISHED:(true|false)__/);
+      if (matchPub) isResultsPublished = matchPub[1] === 'true';
+      cleanNotes = e.notes.replace(/__MAXSCORE:.*?__PUBLISHED:.*?__\n?/, '').trim() || undefined;
+    }
+    return {
+      id: e.id,
+      batchCode: e.batch_code,
+      title: e.title,
+      courseId: e.course_id || '',
+      courseName: e.course_name || '',
+      examDate: e.exam_date,
+      examTimestamp: Number(e.exam_timestamp),
+      hall: e.location || undefined,
+      topics: e.material_covered || undefined,
+      type: (e.type || 'QUIZ') as any,
+      notes: cleanNotes,
+      maxScore,
+      isResultsPublished,
+      createdAt: Number(e.created_at),
+    };
+  });
 }
 
 export async function saveExamSupabase(item: Exam): Promise<void> {
+  let notesPayload = item.notes || '';
+  if (item.maxScore !== undefined || item.isResultsPublished !== undefined) {
+    const metaTag = `__MAXSCORE:${item.maxScore ?? 10}____PUBLISHED:${item.isResultsPublished ? 'true' : 'false'}__`;
+    if (!notesPayload.includes('__MAXSCORE:')) {
+      notesPayload = metaTag + (notesPayload ? '\n' + notesPayload : '');
+    } else {
+      notesPayload = notesPayload.replace(/__MAXSCORE:.*?__PUBLISHED:.*?__/, metaTag);
+    }
+  }
+
   const { error } = await supabase.from('exams').upsert({
     id: item.id,
     batch_code: item.batchCode,
@@ -430,6 +455,7 @@ export async function saveExamSupabase(item: Exam): Promise<void> {
     exam_timestamp: item.examTimestamp,
     location: item.hall,
     material_covered: item.topics,
+    notes: notesPayload || item.notes,
     created_at: item.createdAt || Date.now(),
   });
   if (error) console.error('Error saving exam to Supabase:', error);
@@ -935,40 +961,124 @@ export async function deleteNotificationSupabase(id: string): Promise<void> {
 
 // --- Join Requests ---
 export async function getJoinRequestsSupabase(batchCode?: string): Promise<JoinRequest[]> {
-  let q = supabase.from('join_requests').select('*');
-  if (batchCode) {
-    q = q.eq('batch_code', batchCode);
+  const itemsFromTable: JoinRequest[] = [];
+  try {
+    let q = supabase.from('join_requests').select('*');
+    if (batchCode) {
+      q = q.eq('batch_code', batchCode);
+    }
+    const { data, error } = await q.order('timestamp', { ascending: false });
+    if (!error && data && data.length > 0) {
+      data.forEach((j) => {
+        itemsFromTable.push({
+          id: j.id,
+          userId: j.user_uid,
+          userName: j.user_name,
+          userEmail: j.user_email || '',
+          userAvatar: j.user_avatar || undefined,
+          batchCode: j.batch_code,
+          status: (j.status || 'PENDING') as any,
+          timestamp: Number(j.timestamp || Date.now()),
+        });
+      });
+    }
+  } catch {
+    // Graceful table schema fallback
   }
-  const { data, error } = await q.order('timestamp', { ascending: false });
-  if (error) return [];
-  return (data || []).map((j) => ({
-    id: j.id,
-    userId: j.user_uid,
-    userName: j.user_name,
-    userEmail: j.user_email || '',
-    userAvatar: j.user_avatar || undefined,
-    batchCode: j.batch_code,
-    status: j.status as any,
-    timestamp: Number(j.timestamp),
-  }));
+
+  // Also query users table for pending join requests (bulletproof fallback when join_requests table is missing)
+  try {
+    let uQuery = supabase
+      .from('users')
+      .select('*')
+      .not('pending_batch_code', 'is', null)
+      .neq('pending_batch_code', '');
+
+    if (batchCode) {
+      uQuery = uQuery.eq('pending_batch_code', batchCode);
+    }
+
+    const { data: pendingUsers, error: uErr } = await uQuery;
+    if (!uErr && pendingUsers && pendingUsers.length > 0) {
+      const userReqs: JoinRequest[] = pendingUsers
+        .filter((u: any) => !u.batch_code || u.batch_code !== u.pending_batch_code)
+        .map((u: any) => ({
+          id: `req_${u.uid}`,
+          userId: u.uid,
+          userName: u.name,
+          userEmail: u.email || '',
+          userAvatar: u.avatar || undefined,
+          batchCode: u.pending_batch_code,
+          status: 'PENDING' as const,
+          timestamp: Number(u.created_at || Date.now()),
+        }));
+
+      // Combine requests, avoiding duplicates by userId
+      const seenUserIds = new Set<string>();
+      const combined: JoinRequest[] = [];
+      for (const r of [...itemsFromTable, ...userReqs]) {
+        if (!seenUserIds.has(r.userId)) {
+          seenUserIds.add(r.userId);
+          combined.push(r);
+        }
+      }
+      return combined.sort((a, b) => b.timestamp - a.timestamp);
+    }
+  } catch (err) {
+    console.warn('Error fetching pending users fallback:', err);
+  }
+
+  return itemsFromTable;
 }
 
 export async function saveJoinRequestSupabase(item: JoinRequest): Promise<void> {
-  const { error } = await supabase.from('join_requests').upsert({
-    id: item.id,
-    user_uid: item.userId,
-    user_name: item.userName,
-    user_avatar: item.userAvatar,
-    user_email: item.userEmail,
-    batch_code: item.batchCode,
-    status: item.status,
-    timestamp: item.timestamp,
-  });
-  if (error) logSupabaseError('saving join request', error);
+  // 1. Always update pending_batch_code on users table to ensure persistence across devices & tables
+  try {
+    await supabase.from('users').update({
+      pending_batch_code: item.batchCode,
+      batch_code: '', // Ensure student cannot enter batch until approved
+    }).eq('uid', item.userId);
+  } catch (err) {
+    console.warn('Error updating pending_batch_code on user:', err);
+  }
+
+  // 2. Also try upserting to join_requests table if present
+  try {
+    const { error } = await supabase.from('join_requests').upsert({
+      id: item.id,
+      user_uid: item.userId,
+      user_name: item.userName,
+      user_avatar: item.userAvatar,
+      user_email: item.userEmail,
+      batch_code: item.batchCode,
+      status: item.status,
+      timestamp: item.timestamp,
+    });
+    if (error && error.code !== 'PGRST205') {
+      logSupabaseError('saving join request', error);
+    }
+  } catch {
+    // Handled gracefully
+  }
 }
 
 export async function deleteJoinRequestSupabase(id: string): Promise<void> {
-  await supabase.from('join_requests').delete().eq('id', id);
+  const uid = id.startsWith('req_') ? id.replace('req_', '') : id;
+  // 1. Clear pending_batch_code in users table
+  try {
+    await supabase.from('users').update({
+      pending_batch_code: '',
+    }).eq('uid', uid);
+  } catch (err) {
+    console.warn('Error clearing pending_batch_code on user:', err);
+  }
+
+  // 2. Also delete from join_requests table
+  try {
+    await supabase.from('join_requests').delete().eq('id', id);
+  } catch {
+    // Handled gracefully
+  }
 }
 
 // --- Settings ---

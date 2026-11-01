@@ -14,6 +14,7 @@ import { StudyHubView } from "./views/StudyHubView";
 import { AcademicPathView } from "./views/AcademicPathView";
 import { CommunityHubView } from "./views/CommunityHubView";
 import { UnifiedTasksHub } from "./components/UnifiedTasksHub";
+import { QuizResultsHub } from "./components/QuizResultsHub";
 import {
   getUserNotificationPreferences,
   isCategoryEnabledForUser,
@@ -41,6 +42,7 @@ import {
   saveAssignmentSupabase,
   getExamsSupabase,
   saveExamSupabase,
+  deleteExamSupabase,
   getAttendanceSessionsSupabase,
   saveAttendanceSessionSupabase,
   getAttendanceRecordsSupabase,
@@ -62,6 +64,7 @@ import {
   saveBatchSuggestionSupabase,
   getJoinRequestsSupabase,
   saveJoinRequestSupabase,
+  deleteJoinRequestSupabase,
   getRepresentativeCodesSupabase,
   saveRepresentativeCodeSupabase,
   subscribeTableSupabase,
@@ -754,7 +757,9 @@ export default function App() {
 
   const effectiveBatchCode = (currentUser?.username === 'ahmed' && isStealthMode) 
     ? stealthBatchCode 
-    : (currentUser?.batchCode || (batches.length > 0 ? (batches.find(b => b.code !== 'CS-2024')?.code || batches[0].code) : "ITUOK5"));
+    : (currentUser?.role === UserRole.STUDENT && !currentUser?.batchCode)
+      ? ""
+      : (currentUser?.batchCode || (currentUser?.role === UserRole.OWNER ? (batches.length > 0 ? (batches.find(b => b.code !== 'CS-2024')?.code || batches[0].code) : "ITUOK5") : ""));
 
   // Batch Management State (Developer / Owner)
   const [isAddingBatch, setIsAddingBatch] = useState(false);
@@ -1472,13 +1477,16 @@ export default function App() {
     }
 
     const targetCode = currentUser.batchCode || effectiveBatchCode;
-    getJoinRequestsSupabase(isOwner ? undefined : targetCode).then((items) => {
-      if (items && items.length > 0) setJoinRequests(items);
-    });
+    const fetchRequests = () => {
+      getJoinRequestsSupabase(isOwner ? undefined : targetCode).then((items) => {
+        setJoinRequests(items || []);
+      });
+    };
 
-    const unsubSbReqs = subscribeTableSupabase('join_requests', isOwner ? '' : targetCode, () => {
-      getJoinRequestsSupabase(isOwner ? undefined : targetCode).then(setJoinRequests);
-    });
+    fetchRequests();
+
+    const unsubSbReqs = subscribeTableSupabase('join_requests', isOwner ? '' : targetCode, fetchRequests);
+    const unsubSbUsers = subscribeTableSupabase('users', '', fetchRequests);
 
     const unsubReqs = subscribeJoinRequests(
       targetCode,
@@ -1489,6 +1497,7 @@ export default function App() {
     );
     return () => {
       unsubSbReqs();
+      unsubSbUsers();
       unsubReqs();
     };
   }, [currentUser?.uid, currentUser?.role, currentUser?.batchCode, effectiveBatchCode]);
@@ -2179,13 +2188,16 @@ export default function App() {
         timestamp: Date.now(),
       };
       await saveJoinRequestToFirestore(req);
+      await saveJoinRequestSupabase(req);
 
-      // Update user pendingBatchCode
+      // Update user pendingBatchCode and strictly keep batchCode empty so the student is NEVER admitted without approval
       const updatedUser: User = {
         ...currentUser,
+        batchCode: "",
         pendingBatchCode: resolvedBatchCode,
       };
       await saveUserToFirestore(updatedUser);
+      await saveUserSupabase(updatedUser);
       setCurrentUser(updatedUser);
 
       // Notify representative if exists
@@ -2203,7 +2215,7 @@ export default function App() {
 
       setIsJoiningBatch(false);
       setJoiningCode("");
-      alert(`✅ تم إرسال طلب الانضمام لدفعة (${batchDisplayName}) بنجاح!\nسيصل إشعار لممثل الدفعة لقبولك فوراً.`);
+      alert(`✅ تم إرسال طلب الانضمام لدفعة (${batchDisplayName}) بنجاح!\nطلبك الآن قيد الانتظار ولن تتمكن من دخول الدفعة إلا بعد قبول طلبك من قبل ممثل الدفعة.`);
     } catch (e: any) {
       console.error("Error submitting join request:", e);
       alert("حدث خطأ أثناء إرسال طلب الانضمام، يرجى المحاولة ثانية.");
@@ -2221,11 +2233,14 @@ export default function App() {
     setIsCancellingJoin(true);
     try {
       await deleteJoinRequestFromFirestore(`req_${currentUser.uid}`);
+      await deleteJoinRequestSupabase(`req_${currentUser.uid}`);
       const updatedUser: User = {
         ...currentUser,
+        batchCode: "",
         pendingBatchCode: "",
       };
       await saveUserToFirestore(updatedUser);
+      await saveUserSupabase(updatedUser);
       setCurrentUser(updatedUser);
     } catch (err: any) {
       console.error("Error cancelling join request:", err);
@@ -2240,11 +2255,14 @@ export default function App() {
       // 1. Update user document
       const targetUser = appUsers.find((u) => u.uid === req.userId);
       if (targetUser) {
-        await saveUserToFirestore({
+        const approvedUser: User = {
           ...targetUser,
           batchCode: req.batchCode,
           pendingBatchCode: "",
-        });
+        };
+        await saveUserToFirestore(approvedUser);
+        await saveUserSupabase(approvedUser);
+        setAppUsers((prev) => prev.map((u) => u.uid === req.userId ? approvedUser : u));
       }
 
       // 2. Notify student
@@ -2262,6 +2280,8 @@ export default function App() {
 
       // 3. Delete request
       await deleteJoinRequestFromFirestore(req.id);
+      await deleteJoinRequestSupabase(req.id);
+      setJoinRequests((prev) => prev.filter((r) => r.id !== req.id));
     } catch (e) {
       console.error("Error approving request:", e);
     }
@@ -2282,10 +2302,13 @@ export default function App() {
       if (req) {
         const targetUser = appUsers.find((u) => u.uid === req.userId);
         if (targetUser) {
-          await saveUserToFirestore({
+          const rejectedUser: User = {
             ...targetUser,
             pendingBatchCode: "",
-          });
+          };
+          await saveUserToFirestore(rejectedUser);
+          await saveUserSupabase(rejectedUser);
+          setAppUsers((prev) => prev.map((u) => u.uid === req.userId ? rejectedUser : u));
         }
 
         // Notify student
@@ -2300,6 +2323,8 @@ export default function App() {
         });
       }
       await deleteJoinRequestFromFirestore(id);
+      await deleteJoinRequestSupabase(id);
+      setJoinRequests((prev) => prev.filter((r) => r.id !== id));
     } catch (e) {
       console.error("Error rejecting request:", e);
     }
@@ -6719,6 +6744,133 @@ export default function App() {
         </div>
       );
     }
+  };
+
+  const handleSaveQuizGrades = async (
+    exam: Exam,
+    studentGrades: { studentId: string; score: number; notes?: string }[],
+    maxScore: number,
+    publishNotification: boolean
+  ) => {
+    const assessmentKey = `exam_quiz_${exam.id}`;
+    const now = Date.now();
+    const updatedExam: Exam = {
+      ...exam,
+      maxScore,
+      isResultsPublished: publishNotification ? true : exam.isResultsPublished,
+      publishedAt: publishNotification ? now : exam.publishedAt,
+      publishedBy: currentUser?.name || 'ممثل الدفعة',
+    };
+
+    // 1. Update exam in Supabase & local state
+    await saveExamSupabase(updatedExam);
+    setExams((prev) => prev.map((e) => (e.id === exam.id ? updatedExam : e)));
+
+    // 2. Save individual student grades
+    const newOrUpdatedGrades: Grade[] = [];
+    for (const sg of studentGrades) {
+      const gradeId = `quiz_grade_${exam.id}_${sg.studentId}`;
+      const gradeObj: Grade = {
+        id: gradeId,
+        batchCode: effectiveBatchCode,
+        courseId: exam.courseId,
+        studentId: sg.studentId,
+        assessmentId: assessmentKey,
+        score: sg.score,
+        timestamp: now,
+      };
+      await saveGradeSupabase(gradeObj);
+      newOrUpdatedGrades.push(gradeObj);
+
+      // If publishing, send individual notification to the graded student
+      if (publishNotification) {
+        const targetStudent = appUsers.find((u) => u.uid === sg.studentId);
+        if (targetStudent) {
+          await notifyUserIfAllowed({
+            targetUser: targetStudent,
+            category: 'GRADE',
+            title: `درجتك في ${exam.title} 📝`,
+            content: `أعلن الممثل درجات ${exam.title} (${exam.courseName}). درجتك المحققة: ${sg.score} من ${maxScore}.`,
+            targetTab: Tab.ACADEMIC_PATH,
+            batchCode: effectiveBatchCode,
+          });
+        }
+      }
+    }
+
+    setGrades((prev) => {
+      const idsToReplace = new Set(newOrUpdatedGrades.map((g) => g.id));
+      const filtered = prev.filter((g) => !idsToReplace.has(g.id));
+      return [...filtered, ...newOrUpdatedGrades];
+    });
+
+    // If publishing, broadcast announcement to the entire batch
+    if (publishNotification) {
+      await broadcastBatchNotification({
+        allUsers: appUsers,
+        batchCode: effectiveBatchCode,
+        category: 'GRADE',
+        title: `إعلان درجات: ${exam.title} 📢`,
+        content: `تم إعلان ونشر نتائج ${exam.title} لمادة (${exam.courseName}). تفقد درجتك الآن في تبويب نتائج الكويزات!`,
+        targetTab: Tab.ACADEMIC_PATH,
+      });
+    }
+  };
+
+  const handleCreateExam = async (examData: Partial<Exam>) => {
+    const newExam: Exam = {
+      id: `exam_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      batchCode: effectiveBatchCode,
+      title: examData.title || 'كويز جديد',
+      courseId: examData.courseId || '',
+      courseName: examData.courseName || '',
+      type: examData.type || 'QUIZ',
+      maxScore: examData.maxScore || 10,
+      examDate: examData.examDate || new Date().toISOString().split('T')[0],
+      examTimestamp: examData.examTimestamp || Date.now(),
+      topics: examData.topics,
+      isResultsPublished: false,
+      createdAt: Date.now(),
+      createdBy: currentUser?.uid,
+    };
+    await saveExamSupabase(newExam);
+    setExams((prev) => [newExam, ...prev]);
+  };
+
+  const handleDeleteQuizExam = async (examId: string) => {
+    await deleteExamSupabase(examId);
+    setExams((prev) => prev.filter((e) => e.id !== examId));
+  };
+
+  const renderQuizResults = () => {
+    const batchStudents = appUsers
+      .filter((u) => {
+        if (u.role === UserRole.OWNER) return false;
+        if (u.excludeFromStats) return false;
+        if (u.batchCode === effectiveBatchCode) return true;
+        if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode))
+          return true;
+        return false;
+      })
+      .sort((a, b) =>
+        a.name.localeCompare(b.name, 'ar', { sensitivity: 'base' })
+      );
+
+    return (
+      <QuizResultsHub
+        currentUser={currentUser}
+        isManager={isManager}
+        canManageGrades={canManageGrades}
+        courses={courses}
+        exams={exams}
+        grades={grades}
+        students={batchStudents}
+        effectiveBatchCode={effectiveBatchCode || ''}
+        onSaveQuizGrades={handleSaveQuizGrades}
+        onCreateExam={handleCreateExam}
+        onDeleteExam={handleDeleteQuizExam}
+      />
+    );
   };
 
   const renderAttendance = () => {
@@ -14994,6 +15146,46 @@ export default function App() {
           </div>
         )}
 
+        {/* Leave Batch Option for Students */}
+        {isOwnProfile && currentUser?.role === UserRole.STUDENT && currentUser.batchCode && (
+          <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 p-6 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0 border border-rose-100 dark:border-rose-900/40">
+                  <LogOut size={22} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-800 dark:text-white text-base flex items-center gap-2">
+                    مغادرة الدفعة الحالية ({userToDisplay.batchCode})
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    إذا رغبت بالانتقال إلى دفعة أخرى أو كتابة كود دفعة جديد، يمكنك مغادرة الدفعة وتقديم طلب انضمام جديد لممثل الدفعة.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={async () => {
+                  if (!confirm("هل أنت متأكد من مغادرة هذه الدفعة؟ سيتطلب منك إدخال كود دفعتك الجديدة وإرسال طلب انضمام للممثل.")) return;
+                  const updated: User = {
+                    ...currentUser,
+                    batchCode: "",
+                    pendingBatchCode: "",
+                  };
+                  await saveUserToFirestore(updated);
+                  await saveUserSupabase(updated);
+                  setCurrentUser(updated);
+                  setActiveTab(Tab.HOME);
+                }}
+                className="px-5 py-2.5 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/40 rounded-xl text-xs font-bold transition flex items-center gap-2 self-start sm:self-auto shrink-0 active:scale-95"
+              >
+                <LogOut size={15} />
+                <span>مغادرة الدفعة وتغيير الكود</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Assistant Representative Action Card - When Admin views another student in batch */}
         {!isOwnProfile && isMainAdmin && userToDisplay.role !== UserRole.OWNER && userToDisplay.role !== UserRole.REPRESENTATIVE && (
           <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-blue-100 dark:border-slate-700 p-6 space-y-4">
@@ -15187,6 +15379,7 @@ export default function App() {
                 setAttendanceReportStudent(student);
               }}
               renderGradesContent={renderGrades}
+              renderQuizResultsContent={renderQuizResults}
               renderAttendanceContent={renderAttendance}
               renderScheduleContent={renderSchedule}
             />

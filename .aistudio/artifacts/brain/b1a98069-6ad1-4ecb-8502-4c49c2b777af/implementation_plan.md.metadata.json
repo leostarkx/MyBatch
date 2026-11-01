@@ -1,6 +1,6 @@
 {
-  "summary":  "خطة شاملة لتطوير منصة دفعتي (Dafaaty):\n1. نظام الأسئلة والأجوبة الأكاديمية التفاعلي (Peer Q&A Hub) المخصص لكل مادة مع نظام نقاط السمعة والتفاعل (Academic Points & Badges) للسائل والمجيب.\n2. تطوير قسم المحاضرات والملازم مع عارض PDF تفاعلي مدمج فائق السرعة، ومعاينة مباشرة، وتنزيل فوري، ونسب إنجاز الدراسة للمواد.",
-  "updatedAt":  "2026-10-31T07:59:39.977906499Z",
+  "summary":  "Implementation plan for separating official cumulative course grades (السعي من 50) from published quiz & exam announcement results (نتائج الكويزات والامتحانات), with manager fast grading grid, instant student result notification, and dedicated student private view.",
+  "updatedAt":  "2026-11-01T21:02:23.276320065Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

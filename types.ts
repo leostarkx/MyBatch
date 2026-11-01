@@ -541,6 +541,11 @@ export interface Exam {
   hall?: string; // القاعة الامتحانية
   topics?: string; // المادة المقررة للامتحان
   type?: 'QUIZ' | 'MIDTERM' | 'FINAL' | 'PRACTICAL';
+  notes?: string;
+  maxScore?: number; // الدرجة القصوى (افتراضياً 10 أو 20)
+  isResultsPublished?: boolean; // تم إعلان ونشر النتائج للطلاب
+  publishedAt?: number;
+  publishedBy?: string;
   createdAt: number;
   createdBy?: string;
 }

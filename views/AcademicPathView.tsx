@@ -16,7 +16,7 @@ import {
 import { Course, Grade, AttendanceSession, AttendanceRecord, User } from '../types';
 
 interface AcademicPathViewProps {
-  initialSubTab?: 'grades' | 'attendance' | 'schedule';
+  initialSubTab?: 'grades' | 'quiz_results' | 'attendance' | 'schedule';
   currentUser: User | null;
   courses: Course[];
   grades: Grade[];
@@ -26,6 +26,7 @@ interface AcademicPathViewProps {
   isManager: boolean;
   onOpenAttendanceReport: (student: User) => void;
   renderGradesContent: () => React.ReactNode;
+  renderQuizResultsContent?: () => React.ReactNode;
   renderAttendanceContent: () => React.ReactNode;
   renderScheduleContent: () => React.ReactNode;
 }
@@ -41,10 +42,11 @@ export const AcademicPathView: React.FC<AcademicPathViewProps> = ({
   isManager,
   onOpenAttendanceReport,
   renderGradesContent,
+  renderQuizResultsContent,
   renderAttendanceContent,
   renderScheduleContent,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'grades' | 'attendance' | 'schedule'>(initialSubTab);
+  const [activeSubTab, setActiveSubTab] = useState<'grades' | 'quiz_results' | 'attendance' | 'schedule'>(initialSubTab);
 
   React.useEffect(() => {
     if (initialSubTab) {
@@ -78,7 +80,7 @@ export const AcademicPathView: React.FC<AcademicPathViewProps> = ({
               <span>📊 المسار الأكاديمي، السعي، والحضور</span>
             </h1>
             <p className="opacity-90 text-xs sm:text-sm max-w-2xl leading-relaxed">
-              متابعة السعي التراكمي من 50، درجات الكويزات، كشوفات الحضور والغياب للكروبات A/B/C/D، واستخراج تقرير الـ PDF الرسمي وجدول المحاضرات الأسبوعي.
+              متابعة السعي التراكمي من 50، إعلانات نتائج الكويزات الدورية، كشوفات الحضور والغياب للكروبات، واستخراج تقرير الـ PDF الرسمي وجدول المحاضرات الأسبوعي.
             </p>
           </div>
 
@@ -101,20 +103,33 @@ export const AcademicPathView: React.FC<AcademicPathViewProps> = ({
         <button
           type="button"
           onClick={() => setActiveSubTab('grades')}
-          className={`flex-1 min-w-[130px] py-2.5 px-4 rounded-xl text-xs sm:text-sm font-black transition flex items-center justify-center gap-2 ${
+          className={`flex-1 min-w-[130px] py-2.5 px-4 rounded-xl text-xs sm:text-sm font-black transition flex items-center justify-center gap-2 cursor-pointer ${
             activeSubTab === 'grades'
               ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
               : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'
           }`}
         >
           <Award size={17} />
-          <span>الدرجات والسعي من 50</span>
+          <span>السعي التراكمي من 50</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('quiz_results')}
+          className={`flex-1 min-w-[145px] py-2.5 px-4 rounded-xl text-xs sm:text-sm font-black transition flex items-center justify-center gap-2 cursor-pointer ${
+            activeSubTab === 'quiz_results'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+              : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'
+          }`}
+        >
+          <FileText size={17} />
+          <span>نتائج الكويزات والامتحانات 📝</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveSubTab('attendance')}
-          className={`flex-1 min-w-[130px] py-2.5 px-4 rounded-xl text-xs sm:text-sm font-black transition flex items-center justify-center gap-2 ${
+          className={`flex-1 min-w-[130px] py-2.5 px-4 rounded-xl text-xs sm:text-sm font-black transition flex items-center justify-center gap-2 cursor-pointer ${
             activeSubTab === 'attendance'
               ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
               : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'
@@ -127,7 +142,7 @@ export const AcademicPathView: React.FC<AcademicPathViewProps> = ({
         <button
           type="button"
           onClick={() => setActiveSubTab('schedule')}
-          className={`flex-1 min-w-[130px] py-2.5 px-4 rounded-xl text-xs sm:text-sm font-black transition flex items-center justify-center gap-2 ${
+          className={`flex-1 min-w-[130px] py-2.5 px-4 rounded-xl text-xs sm:text-sm font-black transition flex items-center justify-center gap-2 cursor-pointer ${
             activeSubTab === 'schedule'
               ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
               : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700'
@@ -142,6 +157,12 @@ export const AcademicPathView: React.FC<AcademicPathViewProps> = ({
       {activeSubTab === 'grades' && (
         <div className="animate-in fade-in duration-200">
           {renderGradesContent()}
+        </div>
+      )}
+
+      {activeSubTab === 'quiz_results' && (
+        <div className="animate-in fade-in duration-200">
+          {renderQuizResultsContent ? renderQuizResultsContent() : null}
         </div>
       )}
 
