@@ -81,31 +81,73 @@ export const FormattedTextRenderer: React.FC<FormattedTextRendererProps> = React
   if (!content) return null;
 
   const htmlContainerRef = React.useRef<HTMLDivElement>(null);
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   const isHtml = /<([a-z][a-z0-9]*)\b[^>]*>/i.test(content);
 
   React.useEffect(() => {
     const container = htmlContainerRef.current;
     if (!container) return;
 
-    const handleSpoilerClick = (e: MouseEvent) => {
-      const target = (e.target as HTMLElement).closest(".telegram-spoiler");
-      if (target) {
-        target.classList.toggle("revealed");
+    const handleClick = (e: MouseEvent) => {
+      const spoilerTarget = (e.target as HTMLElement).closest(".telegram-spoiler");
+      if (spoilerTarget) {
+        spoilerTarget.classList.toggle("revealed");
+        return;
+      }
+
+      // Check if an image inside the content was clicked
+      const imgTarget = (e.target as HTMLElement).closest("img");
+      if (imgTarget && imgTarget.src) {
+        setZoomedImage(imgTarget.src);
       }
     };
 
-    container.addEventListener("click", handleSpoilerClick);
-    return () => container.removeEventListener("click", handleSpoilerClick);
+    container.addEventListener("click", handleClick);
+    return () => container.removeEventListener("click", handleClick);
   }, [content]);
 
   if (isHtml) {
     return (
-      <div
-        ref={htmlContainerRef}
-        dir="auto"
-        className={`formatted-html-renderer text-gray-800 dark:text-gray-100 leading-relaxed select-text space-y-2.5 ${className}`}
-        dangerouslySetInnerHTML={{ __html: content }}
-      />
+      <>
+        <div
+          ref={htmlContainerRef}
+          dir="auto"
+          className={`formatted-html-renderer text-gray-800 dark:text-gray-100 leading-relaxed select-text space-y-2.5 ${className}`}
+          dangerouslySetInnerHTML={{ __html: content }}
+        />
+
+        {/* Click-to-Zoom Lightbox Modal */}
+        {zoomedImage && (
+          <div
+            className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200"
+            onClick={() => setZoomedImage(null)}
+          >
+            <div
+              className="relative max-w-4xl max-h-[90vh] flex flex-col items-center justify-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="absolute -top-12 left-0 right-0 flex items-center justify-between text-white px-2">
+                <span className="text-xs font-bold text-slate-300">
+                  انقر على الصورة أو ✕ للإغلاق
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setZoomedImage(null)}
+                  className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition cursor-pointer"
+                  title="إغلاق"
+                >
+                  ✕
+                </button>
+              </div>
+              <img
+                src={zoomedImage}
+                alt="معاينة مكبرة للصورة"
+                className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl border border-white/10"
+              />
+            </div>
+          </div>
+        )}
+      </>
     );
   }
 

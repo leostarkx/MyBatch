@@ -18,6 +18,8 @@ import {
   Check,
 } from 'lucide-react';
 import { AcademicQuestion, AcademicAnswer, Course, User, UserRole } from '../types';
+import { RichTextEditor } from './RichTextEditor';
+import { FormattedTextRenderer } from './FormattedTextRenderer';
 import {
   getAcademicQuestions,
   saveAcademicQuestion,
@@ -654,9 +656,9 @@ export const AcademicQAHub: React.FC<AcademicQAHubProps> = ({
                                 )}
                               </div>
 
-                              <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap leading-relaxed mb-3">
-                                {ans.content}
-                              </p>
+                              <div className="text-xs sm:text-sm text-slate-700 dark:text-slate-200 leading-relaxed mb-3">
+                                <FormattedTextRenderer content={ans.content} />
+                              </div>
 
                               {/* Answer Actions */}
                               <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-200/50 dark:border-slate-700/50">
@@ -691,25 +693,30 @@ export const AcademicQAHub: React.FC<AcademicQAHubProps> = ({
                       </div>
                     )}
 
-                    {/* Add Answer Box */}
-                    <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
-                      <div className="flex items-start gap-2.5">
-                        <textarea
-                          rows={2}
-                          value={newAnswerText}
-                          onChange={(e) => setNewAnswerText(e.target.value)}
-                          placeholder="اكتب إجابتك أو شرحك التفصيلي هنا لمساعدة زميلك..."
-                          className="flex-1 p-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                        />
+                    {/* Add Answer Box with Rich Text Editor */}
+                    <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                          <Sparkles size={14} className="text-indigo-500" />
+                          اكتب إجابتك أو شرحك بالمحرر المائي ✍️
+                        </span>
                         <button
                           type="button"
                           onClick={() => handleSubmitAnswer(q)}
                           disabled={submittingAnswer || !newAnswerText.trim()}
-                          className="px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-2xl flex items-center gap-1.5 disabled:opacity-40 transition cursor-pointer shrink-0"
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 disabled:opacity-40 transition cursor-pointer shadow-md shadow-indigo-600/20 active:scale-95 shrink-0"
                         >
-                          <Send size={14} />
-                          <span>إرسال (+10ن)</span>
+                          <Send size={13} />
+                          <span>إرسال الإجابة (+10ن)</span>
                         </button>
+                      </div>
+                      <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-xs">
+                        <RichTextEditor
+                          value={newAnswerText}
+                          onChange={setNewAnswerText}
+                          minHeight="min-h-[130px]"
+                          placeholder="اشرح لزميلك بالتفصيل هنا... يمكنك تنسيق النص، تلوين القوانين، وإدراج صور توضيحية للحل 💡"
+                        />
                       </div>
                     </div>
                   </div>

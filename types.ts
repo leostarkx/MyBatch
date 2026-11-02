@@ -153,6 +153,7 @@ export interface User {
   notificationPrefs?: NotificationPreferences;
   assistantDuties?: AssistantDuty[]; // الرتب والمهام الإدارية الموكلة للطالب
   academicPoints?: number; // نقاط التفاعل والسمعة الأكاديمية للطالب
+  repNickname?: string; // اللقب أو الاسم المخصص من قبل الممثل للترتيب الأبجدي الدقيق
 }
 
 // Batch Instance Schema (النسخ والدفعات)

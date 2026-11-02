@@ -103,6 +103,7 @@ import {
 import {
   Send,
   Plus,
+  Mail,
   Download,
   Trash2,
   LogOut,
@@ -1087,6 +1088,78 @@ export default function App() {
   const [assignFilterStatus, setAssignFilterStatus] = useState<"all" | "pending" | "completed" | "urgent">("all");
   const [assignFilterCourse, setAssignFilterCourse] = useState("all");
   const [assignSearchQuery, setAssignSearchQuery] = useState("");
+
+  // Nickname & Email Switcher States
+  const [nicknameTargetStudent, setNicknameTargetStudent] = useState<User | null>(null);
+  const [nicknameInput, setNicknameInput] = useState<string>("");
+  const [isSavingNickname, setIsSavingNickname] = useState<boolean>(false);
+
+  const [isChangeEmailModalOpen, setIsChangeEmailModalOpen] = useState<boolean>(false);
+  const [newEmailInput, setNewEmailInput] = useState<string>("");
+  const [emailChangeError, setEmailChangeError] = useState<string>("");
+  const [emailChangeSuccess, setEmailChangeSuccess] = useState<string | null>(null);
+  const [isUpdatingEmail, setIsUpdatingEmail] = useState<boolean>(false);
+  const [emailTargetStudent, setEmailTargetStudent] = useState<User | null>(null);
+
+  const handleUpdateStudentNickname = async (studentUid: string, nickname: string) => {
+    const target = appUsers.find((u) => u.uid === studentUid);
+    if (!target) return;
+    const trimmed = nickname.trim();
+    const updatedUser: User = {
+      ...target,
+      repNickname: trimmed ? trimmed : undefined,
+    };
+    setIsSavingNickname(true);
+    try {
+      await saveUserToFirestore(updatedUser);
+      await saveUserSupabase(updatedUser);
+      setAppUsers((prev) =>
+        prev.map((u) => (u.uid === studentUid ? updatedUser : u))
+      );
+      if (currentUser?.uid === studentUid) {
+        setCurrentUser(updatedUser);
+        localStorage.setItem("auth_user", JSON.stringify(updatedUser));
+      }
+    } finally {
+      setIsSavingNickname(false);
+      setNicknameTargetStudent(null);
+    }
+  };
+
+  const handleUpdateUserEmail = async (targetUid: string, newEmail: string) => {
+    const trimmed = newEmail.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(trimmed)) {
+      setEmailChangeError("يرجى كتابة عنوان بريد إلكتروني صالح (مثال: student@gmail.com)");
+      return false;
+    }
+    setIsUpdatingEmail(true);
+    setEmailChangeError("");
+    try {
+      const target = appUsers.find((u) => u.uid === targetUid);
+      if (!target) {
+        setEmailChangeError("لم يتم العثور على حساب الطالب");
+        return false;
+      }
+      const updatedUser: User = { ...target, email: trimmed };
+      await saveUserToFirestore(updatedUser);
+      await saveUserSupabase(updatedUser);
+      setAppUsers((prev) =>
+        prev.map((u) => (u.uid === targetUid ? updatedUser : u))
+      );
+      if (currentUser?.uid === targetUid) {
+        setCurrentUser(updatedUser);
+        localStorage.setItem("auth_user", JSON.stringify(updatedUser));
+      }
+      setEmailChangeSuccess("تم تبديل وتحديث البريد الإلكتروني بنجاح! جميع بياناتك وسجلاتك الأكاديمية مستمرة ومحفوظة.");
+      return true;
+    } catch (err: any) {
+      setEmailChangeError(err?.message || "حدث خطأ أثناء تحديث البريد الإلكتروني");
+      return false;
+    } finally {
+      setIsUpdatingEmail(false);
+    }
+  };
 
   // --- Firebase & Supabase Initialization and Listeners ---
   useEffect(() => {
@@ -5457,7 +5530,10 @@ export default function App() {
         return false;
       })
       .sort((a, b) =>
-        a.name.localeCompare(b.name, "ar", { sensitivity: "base" })
+        compareArabicNames(
+          a.repNickname?.trim() || a.name,
+          b.repNickname?.trim() || b.name
+        )
       );
 
     // Quick Assessment Presets for Representative
@@ -5973,12 +6049,19 @@ export default function App() {
                       </thead>
                       <tbody className="divide-y divide-gray-50 dark:divide-slate-700">
                         {batchStudents
-                          .filter((s) =>
-                            s.name
-                              .toLowerCase()
-                              .includes(gradeEditorSearch.toLowerCase())
+                          .filter((s) => {
+                            const q = gradeEditorSearch.toLowerCase();
+                            return (
+                              s.name.toLowerCase().includes(q) ||
+                              (s.repNickname && s.repNickname.toLowerCase().includes(q))
+                            );
+                          })
+                          .sort((a, b) =>
+                            compareArabicNames(
+                              a.repNickname?.trim() || a.name,
+                              b.repNickname?.trim() || b.name
+                            )
                           )
-                          .sort((a, b) => compareArabicNames(a.name, b.name))
                           .map((student, idx) => (
                             <tr
                               key={student.uid}
@@ -5993,15 +6076,41 @@ export default function App() {
                               >
                                 <img
                                   src={student.avatar}
-                                  className="w-8 h-8 rounded-full object-cover"
+                                  className="w-8 h-8 rounded-full object-cover shrink-0"
                                   alt=""
                                 />
-                                <div>
-                                  <span className="font-bold text-xs md:text-sm text-gray-800 dark:text-gray-200 block">
-                                    {student.name}
-                                  </span>
-                                  {student.isOfficial && (
-                                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-bold text-xs md:text-sm text-gray-800 dark:text-gray-200">
+                                      {student.repNickname || student.name}
+                                    </span>
+                                    {student.repNickname && (
+                                      <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.2 rounded-md font-bold">
+                                        لقب أبجدي 🏷️
+                                      </span>
+                                    )}
+                                    {canManageGrades && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setNicknameTargetStudent(student);
+                                          setNicknameInput(student.repNickname || student.name);
+                                        }}
+                                        className="text-gray-300 hover:text-primary transition p-0.5"
+                                        title="تعديل لقب الطالب للترتيب الأبجدي"
+                                      >
+                                        <Edit3 size={11} />
+                                      </button>
+                                    )}
+                                  </div>
+                                  {student.repNickname && (
+                                    <span className="text-[10px] text-gray-400 block truncate">
+                                      الأصل: {student.name}
+                                    </span>
+                                  )}
+                                  {student.isOfficial && !student.repNickname && (
+                                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold block">
                                       طالب مضاف بالسجل
                                     </span>
                                   )}
@@ -6174,12 +6283,19 @@ export default function App() {
                       </thead>
                       <tbody className="divide-y divide-gray-100 dark:divide-slate-700 text-xs">
                         {batchStudents
-                          .filter((s) =>
-                            s.name
-                              .toLowerCase()
-                              .includes(gradeEditorSearch.toLowerCase())
+                          .filter((s) => {
+                            const q = gradeEditorSearch.toLowerCase();
+                            return (
+                              s.name.toLowerCase().includes(q) ||
+                              (s.repNickname && s.repNickname.toLowerCase().includes(q))
+                            );
+                          })
+                          .sort((a, b) =>
+                            compareArabicNames(
+                              a.repNickname?.trim() || a.name,
+                              b.repNickname?.trim() || b.name
+                            )
                           )
-                          .sort((a, b) => compareArabicNames(a.name, b.name))
                           .map((student, idx) => {
                             let studentCumulativeTotal = 0;
                             let hasAnyRecorded = false;
@@ -6208,7 +6324,37 @@ export default function App() {
                                       alt=""
                                       className="w-7 h-7 rounded-full object-cover shrink-0"
                                     />
-                                    <span className="truncate">{student.name}</span>
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="truncate">
+                                          {student.repNickname || student.name}
+                                        </span>
+                                        {student.repNickname && (
+                                          <span className="text-[9px] bg-primary/10 text-primary px-1.5 py-0.2 rounded-md font-bold">
+                                            لقب
+                                          </span>
+                                        )}
+                                        {canManageGrades && (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setNicknameTargetStudent(student);
+                                              setNicknameInput(student.repNickname || student.name);
+                                            }}
+                                            className="text-gray-300 hover:text-primary transition p-0.5"
+                                            title="تعديل لقب الطالب للأبجدية"
+                                          >
+                                            <Edit3 size={11} />
+                                          </button>
+                                        )}
+                                      </div>
+                                      {student.repNickname && (
+                                        <span className="text-[10px] text-gray-400 block font-normal truncate">
+                                          الأصل: {student.name}
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
                                 </td>
                                 {cumulativeItems.map((asm) => {
@@ -6853,7 +6999,10 @@ export default function App() {
         return false;
       })
       .sort((a, b) =>
-        a.name.localeCompare(b.name, 'ar', { sensitivity: 'base' })
+        compareArabicNames(
+          a.repNickname?.trim() || a.name,
+          b.repNickname?.trim() || b.name
+        )
       );
 
     return (
@@ -6869,6 +7018,7 @@ export default function App() {
         onSaveQuizGrades={handleSaveQuizGrades}
         onCreateExam={handleCreateExam}
         onDeleteExam={handleDeleteQuizExam}
+        onUpdateStudentNickname={handleUpdateStudentNickname}
       />
     );
   };
@@ -6927,7 +7077,10 @@ export default function App() {
 
         // Alphabetical sorting in Arabic
         const sortedStudents = [...activeBatchStudents].sort((a, b) =>
-          compareArabicNames(a.name, b.name)
+          compareArabicNames(
+            a.repNickname?.trim() || a.name,
+            b.repNickname?.trim() || b.name
+          )
         );
 
         // Students who belong to this session's target group OR have an exception/record in this session
@@ -7505,10 +7658,32 @@ export default function App() {
                           alt=""
                         />
                         <div>
-                          <div className="flex items-center gap-2 flex-wrap">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <p className="font-bold text-sm text-gray-800 dark:text-white">
-                              {student.name}
+                              {student.repNickname || student.name}
                             </p>
+                            {student.repNickname && (
+                              <span
+                                className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-md font-bold"
+                                title="لقب أبجدي محدد من الممثل"
+                              >
+                                لقب أبجدي 🏷️
+                              </span>
+                            )}
+                            {canManageAttendance && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setNicknameTargetStudent(student);
+                                  setNicknameInput(student.repNickname || student.name);
+                                }}
+                                className="text-gray-300 hover:text-primary transition p-0.5"
+                                title="تعديل لقب الطالب للترتيب الأبجدي"
+                              >
+                                <Edit3 size={12} />
+                              </button>
+                            )}
                             {student.academicGroup ? (
                               <span
                                 className={`text-[10px] font-black px-2 py-0.5 rounded-lg ${
@@ -7535,6 +7710,11 @@ export default function App() {
                               </span>
                             )}
                           </div>
+                          {student.repNickname && (
+                            <span className="text-[11px] text-gray-400 block mt-0.5">
+                              الاسم الأصلي: {student.name}
+                            </span>
+                          )}
                           <div className="flex items-center gap-2 text-[10px] text-gray-400 mt-0.5 flex-wrap">
                             <span>
                               {student.username
@@ -15006,6 +15186,116 @@ export default function App() {
           </div>
         </div>
 
+        {/* Account Email Switcher / Updater Card */}
+        {isOwnProfile && currentUser && (
+          <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-indigo-100 dark:border-slate-700 p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-200/60 dark:border-indigo-800/50 shadow-xs">
+                  <Mail size={22} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-bold text-gray-800 dark:text-white text-base">
+                      البريد الإلكتروني وحساب الطالب (تبديل الحساب 🔄)
+                    </h3>
+                    <span className="text-[10px] bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/40 px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1">
+                      <CheckCircle2 size={11} />
+                      <span>بياناتك وسجلاتك مستمرة 100%</span>
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    إذا سجلت بحساب بريد مختلف أو ترغب بتغيير إيميلك المسجل، يمكنك تبديله هنا وستبقى جميع سعياتك، درجاتك، حضورك، وملخصاتك محفوظة بالكامل دون أي فقدان.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEmailTargetStudent(currentUser);
+                  setNewEmailInput(currentUser.email || "");
+                  setEmailChangeError("");
+                  setEmailChangeSuccess(null);
+                  setIsChangeEmailModalOpen(true);
+                }}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition shadow-md shadow-indigo-600/20 flex items-center gap-2 self-start sm:self-auto shrink-0 active:scale-95"
+              >
+                <Mail size={15} />
+                <span>تبديل البريد الإلكتروني</span>
+              </button>
+            </div>
+
+            <div className="bg-gray-50 dark:bg-slate-700/40 rounded-2xl p-3.5 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border border-gray-100 dark:border-slate-700">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-gray-400 font-bold">الإيميل المسجل حالياً:</span>
+                <span className="font-mono font-bold text-gray-800 dark:text-gray-200">
+                  {currentUser.email || "لم يتم تسجيل بريد إلكتروني"}
+                </span>
+              </div>
+              <span className="text-[11px] text-gray-400">
+                المعرّف الأكاديمي الثابت (UID): <span className="font-mono text-gray-500 dark:text-gray-400">#{currentUser.uid.slice(-8)}</span>
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Representative View of Another Student's Email & Nickname Actions */}
+        {!isOwnProfile && isManager && (
+          <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-purple-100 dark:border-slate-700 p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 border border-purple-200/60 dark:border-purple-800/50 shadow-xs">
+                  <Edit3 size={22} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-bold text-gray-800 dark:text-white text-base">
+                      إدارة اللقب الأبجدي وبريد الطالب 🏷️
+                    </h3>
+                    {userToDisplay.repNickname && (
+                      <span className="text-[10px] bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300 px-2.5 py-0.5 rounded-full font-bold">
+                        اللقب: {userToDisplay.repNickname}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    يمكنك تعيين لقب رسمي يظهر لك في كشوفات الحضور والسعي لاعتماد الترتيب الأبجدي الدقيق، أو مساعدة الطالب في تحديث بريده المسجل.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNicknameTargetStudent(userToDisplay);
+                    setNicknameInput(userToDisplay.repNickname || userToDisplay.name);
+                  }}
+                  className="px-4 py-2.5 bg-primary hover:bg-primary/90 text-white rounded-xl text-xs font-bold transition shadow-sm flex items-center gap-1.5 active:scale-95"
+                >
+                  <Edit3 size={14} />
+                  <span>{userToDisplay.repNickname ? "تعديل اللقب الأبجدي" : "تحديد لقب أبجدي"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmailTargetStudent(userToDisplay);
+                    setNewEmailInput(userToDisplay.email || "");
+                    setEmailChangeError("");
+                    setEmailChangeSuccess(null);
+                    setIsChangeEmailModalOpen(true);
+                  }}
+                  className="px-4 py-2.5 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 rounded-xl text-xs font-bold transition border border-indigo-200 dark:border-indigo-800/50 flex items-center gap-1.5 active:scale-95"
+                >
+                  <Mail size={14} />
+                  <span>تحديث بريد الطالب</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Theme Selector (Only for own profile) */}
         {isOwnProfile && (
           <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-sm border border-gray-100 dark:border-slate-700 p-6">
@@ -16135,6 +16425,240 @@ export default function App() {
                     <span>{editingAssignment ? "حفظ التعديلات" : "حفظ ونشر الواجب للدفعة 🚀"}</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Set / Edit Student Nickname for Alphabetical Order */}
+      {nicknameTargetStudent && (
+        <div
+          onClick={() => setNicknameTargetStudent(null)}
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-800 w-full max-w-md rounded-3xl p-6 shadow-2xl border border-gray-100 dark:border-slate-700 space-y-4 animate-in zoom-in-95 duration-200"
+          >
+            <div className="flex justify-between items-center pb-3 border-b border-gray-100 dark:border-slate-700">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold">
+                  <Edit3 size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-gray-800 dark:text-white">
+                    تسمية مخصصة للترتيب الأبجدي 🏷️
+                  </h3>
+                  <p className="text-xs text-gray-400">
+                    تظهر لك في كشوفات الحضور، السعي، ونتائج الكويزات
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNicknameTargetStudent(null)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1.5 rounded-xl"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-slate-700/50 rounded-2xl border border-gray-100 dark:border-slate-700">
+              <img
+                src={nicknameTargetStudent.avatar}
+                alt=""
+                className="w-11 h-11 rounded-full object-cover border border-gray-200 dark:border-slate-600 shrink-0"
+              />
+              <div className="min-w-0">
+                <span className="text-xs text-gray-400 font-bold block">الاسم الأصلي المسجل:</span>
+                <span className="text-sm font-black text-gray-800 dark:text-white truncate block">
+                  {nicknameTargetStudent.name}
+                </span>
+                <span className="text-[10px] text-gray-400 font-mono">
+                  @{nicknameTargetStudent.username || "student"}
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                اللقب أو الاسم الأبجدي المعتمد
+              </label>
+              <input
+                type="text"
+                value={nicknameInput}
+                onChange={(e) => setNicknameInput(e.target.value)}
+                placeholder="مثال: أحمد علي جاسم (الاسم الرسمي للكشف)"
+                className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/20 transition"
+                autoFocus
+              />
+              <p className="text-[11px] text-gray-400 mt-1 leading-relaxed">
+                * عند تحديد هذا اللقب، سيترتب الطالب بدقة في قائمة الحضور والسعي التراكمي والكويزات بناءً على هذا الاسم وفق الحروف الهجائية العربية.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-2">
+              {nicknameTargetStudent.repNickname && (
+                <button
+                  type="button"
+                  disabled={isSavingNickname}
+                  onClick={() => handleUpdateStudentNickname(nicknameTargetStudent.uid, "")}
+                  className="px-3 py-2.5 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-xl font-bold transition disabled:opacity-50"
+                >
+                  إلغاء اللقب
+                </button>
+              )}
+              <div className="flex gap-2 flex-1 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setNicknameTargetStudent(null)}
+                  className="px-4 py-2.5 bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 rounded-xl font-bold text-xs hover:bg-gray-200 transition"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  disabled={isSavingNickname}
+                  onClick={() => handleUpdateStudentNickname(nicknameTargetStudent.uid, nicknameInput)}
+                  className="px-5 py-2.5 bg-primary text-white rounded-xl font-bold text-xs shadow-md shadow-primary/20 hover:bg-primary/90 transition flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSavingNickname ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Save size={14} />
+                  )}
+                  <span>حفظ التسمية والأبجدية</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Account Email Switcher / Updater */}
+      {isChangeEmailModalOpen && (
+        <div
+          onClick={() => {
+            if (!isUpdatingEmail) setIsChangeEmailModalOpen(false);
+          }}
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-800 w-full max-w-md rounded-3xl p-6 shadow-2xl border border-gray-100 dark:border-slate-700 space-y-4 animate-in zoom-in-95 duration-200"
+          >
+            <div className="flex justify-between items-center pb-3 border-b border-gray-100 dark:border-slate-700">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold">
+                  <Mail size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-gray-800 dark:text-white">
+                    تبديل البريد الإلكتروني للحساب 🔄
+                  </h3>
+                  <p className="text-xs text-gray-400">
+                    مع الحفاظ على كامل السجلات والدرجات والغيابات
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isUpdatingEmail}
+                onClick={() => setIsChangeEmailModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1.5 rounded-xl disabled:opacity-50"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Current Email display */}
+            <div className="p-3 bg-gray-50 dark:bg-slate-700/50 rounded-2xl border border-gray-100 dark:border-slate-700 space-y-1">
+              <span className="text-[11px] text-gray-400 font-bold block">
+                الحساب المستهدف:
+              </span>
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-black text-gray-800 dark:text-white">
+                  {(emailTargetStudent || currentUser)?.name}
+                </span>
+                <span className="font-mono text-gray-500 dark:text-gray-400">
+                  {(emailTargetStudent || currentUser)?.email || "لا يوجد إيميل سابق"}
+                </span>
+              </div>
+            </div>
+
+            {/* Safe note */}
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 rounded-2xl text-[11px] text-emerald-800 dark:text-emerald-300 leading-relaxed flex items-start gap-2">
+              <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+              <span>
+                <strong>ضمان استمرار البيانات 100%:</strong> تغيير البريد الإلكتروني لا يحذف ولا يفصل حسابك، بل يحدّث إيميل تسجيل الدخول والاتصال مع بقاء جميع سعياتك، حضورك، كروباتك ومشاريعك كما هي بالضبط.
+              </span>
+            </div>
+
+            {emailChangeError && (
+              <div className="p-3 bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-300 border border-red-200 dark:border-red-900/40 rounded-2xl text-xs flex items-center gap-2">
+                <AlertCircle size={15} className="shrink-0 text-red-500" />
+                <span>{emailChangeError}</span>
+              </div>
+            )}
+
+            {emailChangeSuccess && (
+              <div className="p-3 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/40 rounded-2xl text-xs flex items-center gap-2">
+                <CheckCircle2 size={15} className="shrink-0 text-emerald-600" />
+                <span>{emailChangeSuccess}</span>
+              </div>
+            )}
+
+            <div>
+              <label className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 block">
+                البريد الإلكتروني الجديد <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="email"
+                value={newEmailInput}
+                onChange={(e) => {
+                  setNewEmailInput(e.target.value);
+                  setEmailChangeError("");
+                }}
+                placeholder="student.new@gmail.com"
+                className="w-full bg-gray-50 dark:bg-slate-700 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-600 rounded-xl px-4 py-3 text-sm font-mono outline-none focus:ring-2 focus:ring-indigo-500/20 text-left transition"
+                dir="ltr"
+                autoFocus
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isUpdatingEmail}
+                onClick={() => setIsChangeEmailModalOpen(false)}
+                className="flex-1 py-2.5 bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 rounded-xl font-bold text-xs"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                disabled={isUpdatingEmail || !newEmailInput.trim()}
+                onClick={async () => {
+                  const targetUid = emailTargetStudent?.uid || currentUser?.uid;
+                  if (!targetUid) return;
+                  const ok = await handleUpdateUserEmail(targetUid, newEmailInput);
+                  if (ok) {
+                    setTimeout(() => {
+                      setIsChangeEmailModalOpen(false);
+                      setEmailTargetStudent(null);
+                      setEmailChangeSuccess(null);
+                    }, 1500);
+                  }
+                }}
+                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2 disabled:opacity-50 transition active:scale-95"
+              >
+                {isUpdatingEmail ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <Save size={15} />
+                )}
+                <span>تحديث وحفظ الإيميل</span>
               </button>
             </div>
           </div>

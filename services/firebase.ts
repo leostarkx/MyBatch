@@ -818,8 +818,12 @@ export function compareArabicNames(nameA?: string, nameB?: string): number {
   return (nameA || '').localeCompare(nameB || '', 'ar');
 }
 
-export function sortUsersAlphabetically<T extends { name?: string }>(users: T[]): T[] {
-  return [...users].sort((a, b) => compareArabicNames(a.name, b.name));
+export function sortUsersAlphabetically<T extends { name?: string; repNickname?: string }>(users: T[]): T[] {
+  return [...users].sort((a, b) => {
+    const nameA = a.repNickname?.trim() || a.name || '';
+    const nameB = b.repNickname?.trim() || b.name || '';
+    return compareArabicNames(nameA, nameB);
+  });
 }
 
 export function subscribeUsers(callback: (users: User[]) => void) {

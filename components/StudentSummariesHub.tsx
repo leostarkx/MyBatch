@@ -43,6 +43,7 @@ import {
 import { broadcastBatchNotification } from "../services/notificationService";
 import { RichTextEditor } from "./RichTextEditor";
 import { FormattedTextRenderer } from "./FormattedTextRenderer";
+import { SummaryReaderModal } from "./SummaryReaderModal";
 
 interface StudentSummariesHubProps {
   currentUser: User | null;
@@ -135,6 +136,7 @@ export const StudentSummariesHub: React.FC<StudentSummariesHubProps> = ({
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
   const [uploadProgressText, setUploadProgressText] = useState("");
   const [isSavingSummary, setIsSavingSummary] = useState(false);
+  const [selectedSummaryForReading, setSelectedSummaryForReading] = useState<StudentSummary | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -728,7 +730,11 @@ export const StudentSummariesHub: React.FC<StudentSummariesHubProps> = ({
                   </div>
 
                   {/* Title */}
-                  <h3 className="font-black text-base text-gray-900 dark:text-white mb-2 leading-snug">
+                  <h3
+                    onClick={() => setSelectedSummaryForReading(summary)}
+                    className="font-black text-base text-gray-900 dark:text-white mb-2 leading-snug cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 transition"
+                    title="انقر لتكبير وقراءة الملخص بملء الشاشة 📖"
+                  >
                     {summary.title}
                   </h3>
 
@@ -806,6 +812,16 @@ export const StudentSummariesHub: React.FC<StudentSummariesHubProps> = ({
                     </div>
                   )}
                 </div>
+
+                {/* Dedicated Read & Expand Button */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedSummaryForReading(summary)}
+                  className="w-full mt-2 mb-3 py-2 px-4 rounded-2xl bg-indigo-50/90 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 font-black text-xs transition flex items-center justify-center gap-2 border border-indigo-200/60 dark:border-indigo-800/50 shadow-xs cursor-pointer group active:scale-98"
+                >
+                  <BookOpen size={14} className="group-hover:scale-110 transition-transform text-indigo-600 dark:text-indigo-400" />
+                  <span>تكبير وقراءة الملخص كاملاً 📖</span>
+                </button>
 
                 {/* Card Footer: Author Info + Helpful/Like Button */}
                 <div className="pt-3 border-t border-gray-100 dark:border-slate-700/80 flex items-center justify-between gap-2">
@@ -1067,6 +1083,18 @@ export const StudentSummariesHub: React.FC<StudentSummariesHubProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Expanded Lecture-like Summary Reader Modal */}
+      {selectedSummaryForReading && (
+        <SummaryReaderModal
+          summary={selectedSummaryForReading}
+          currentUser={currentUser}
+          isManager={isManager}
+          onClose={() => setSelectedSummaryForReading(null)}
+          onToggleLike={handleToggleLike}
+          onPreviewImage={onPreviewImage}
+        />
       )}
     </div>
   );

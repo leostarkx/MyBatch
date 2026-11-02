@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for separating official cumulative course grades (السعي من 50) from published quiz & exam announcement results (نتائج الكويزات والامتحانات), with manager fast grading grid, instant student result notification, and dedicated student private view.",
-  "updatedAt":  "2026-11-01T21:02:23.276320065Z",
+  "summary":  "خطة عمل لتنفيذ: 1) ميزة تغيير البريد الإلكتروني للحساب من الملف الشخصي مع الحفاظ التام على البيانات والدرجات، 2) تمكين الممثل من تعيين اسم/لقب مخصص (Nickname) لكل طالب لترتيب كشوفات الحضور والدرجات أبجدياً بدقة تامة.",
+  "updatedAt":  "2026-11-02T14:56:42.032864989Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

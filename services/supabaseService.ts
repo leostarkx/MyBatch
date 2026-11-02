@@ -185,10 +185,16 @@ export async function getUsersSupabase(batchCode?: string): Promise<User[]> {
     notificationPrefs: u.notification_prefs || undefined,
     assistantDuties: u.assistant_duties || undefined,
     academicPoints: Number(u.academic_points || 0),
+    repNickname: u.rep_nickname || (u.notification_prefs as any)?.repNickname || undefined,
   }));
 }
 
 export async function saveUserSupabase(user: User): Promise<void> {
+  const mergedPrefs = {
+    ...(user.notificationPrefs || {}),
+    ...(user.repNickname ? { repNickname: user.repNickname } : {}),
+  };
+
   const { error } = await supabase.from('users').upsert({
     uid: user.uid,
     username: user.username,
@@ -208,7 +214,7 @@ export async function saveUserSupabase(user: User): Promise<void> {
     signature_color: user.signatureColor,
     studied_material_ids: user.studiedMaterialIds,
     bookmarked_material_ids: user.bookmarkedMaterialIds,
-    notification_prefs: user.notificationPrefs,
+    notification_prefs: mergedPrefs,
     assistant_duties: user.assistantDuties,
     academic_points: user.academicPoints || 0,
   });

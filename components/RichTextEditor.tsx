@@ -127,6 +127,45 @@ async function compressImageFile(file: File, maxDimension = 1200, quality = 0.82
   });
 }
 
+// Global window helpers for inline note image sizing and alignment in contenteditable
+if (typeof window !== 'undefined') {
+  (window as any).__setNoteImgSize = (btn: HTMLElement, sizePercent: number) => {
+    const block = btn.closest('.note-image-block') as HTMLElement;
+    if (!block) return;
+    const wrapper = (block.querySelector('.note-image-wrapper') || block.querySelector('div:not(.image-controls-toolbar)')) as HTMLElement;
+    if (wrapper) {
+      wrapper.style.maxWidth = `${sizePercent}%`;
+      wrapper.style.width = `${sizePercent}%`;
+    }
+    const img = block.querySelector('img') as HTMLElement;
+    if (img) {
+      img.style.maxWidth = '100%';
+      img.style.width = '100%';
+    }
+    const toolbar = block.querySelector('.image-controls-toolbar');
+    if (toolbar) {
+      toolbar.querySelectorAll('.img-size-btn').forEach((b) => {
+        (b as HTMLElement).style.background = '';
+      });
+      btn.style.background = '#6366f1';
+    }
+    const editor = block.closest('[contenteditable="true"]');
+    if (editor) {
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  };
+
+  (window as any).__setNoteImgAlign = (btn: HTMLElement, align: 'right' | 'center' | 'left') => {
+    const block = btn.closest('.note-image-block') as HTMLElement;
+    if (!block) return;
+    block.style.textAlign = align;
+    const editor = block.closest('[contenteditable="true"]');
+    if (editor) {
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  };
+}
+
 export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   value,
   onChange,
@@ -1140,10 +1179,22 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
         pushHistorySnapshot(editorRef.current.innerHTML, false);
 
         const imgBlockHtml = `
-          <div class="note-image-block" contenteditable="false" style="margin: 14px 0; text-align: center; position: relative;">
-            <div style="position: relative; display: inline-block; max-width: 100%;">
-              <img src="${compressedDataUrl}" alt="صورة توضيحية للملخص" style="max-width: 100%; height: auto; border-radius: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); display: block; margin: 0 auto;" />
-              <button type="button" class="image-delete-btn" onclick="this.closest('.note-image-block').remove();" title="حذف الصورة">✕ حذف</button>
+          <div class="note-image-block" contenteditable="false" style="margin: 16px 0; text-align: center; position: relative;">
+            <div class="image-controls-toolbar" style="display: inline-flex; align-items: center; gap: 4px; background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(8px); padding: 4px 8px; border-radius: 12px; margin-bottom: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.2); direction: rtl;">
+              <span style="font-size: 10px; color: #94a3b8; font-weight: bold; margin-left: 2px;">الحجم:</span>
+              <button type="button" class="img-size-btn" onclick="window.__setNoteImgSize(this, 30)" title="حجم صغير">صغير 30%</button>
+              <button type="button" class="img-size-btn" onclick="window.__setNoteImgSize(this, 60)" style="background: #6366f1;" title="حجم متوسط">متوسط 60%</button>
+              <button type="button" class="img-size-btn" onclick="window.__setNoteImgSize(this, 85)" title="حجم كبير">كبير 85%</button>
+              <button type="button" class="img-size-btn" onclick="window.__setNoteImgSize(this, 100)" title="حجم كامل">كامل 100%</button>
+              <span style="width: 1px; height: 12px; background: rgba(255,255,255,0.2); margin: 0 3px;"></span>
+              <button type="button" class="img-size-btn" onclick="window.__setNoteImgAlign(this, 'right')" title="محاذاة لليمين">يمين</button>
+              <button type="button" class="img-size-btn" onclick="window.__setNoteImgAlign(this, 'center')" title="محاذاة بالوسط">وسط</button>
+              <button type="button" class="img-size-btn" onclick="window.__setNoteImgAlign(this, 'left')" title="محاذاة لليسار">يسار</button>
+              <span style="width: 1px; height: 12px; background: rgba(255,255,255,0.2); margin: 0 3px;"></span>
+              <button type="button" class="image-delete-btn" onclick="this.closest('.note-image-block').remove();" title="حذف الصورة">✕</button>
+            </div>
+            <div class="note-image-wrapper" style="position: relative; display: inline-block; max-width: 60%; width: 60%; transition: all 0.25s ease;">
+              <img src="${compressedDataUrl}" alt="صورة توضيحية للملخص" style="max-width: 100%; width: 100%; height: auto; border-radius: 14px; box-shadow: 0 4px 14px rgba(0,0,0,0.1); display: block; margin: 0 auto;" />
             </div>
             <div class="note-image-caption" contenteditable="true" style="margin-top: 6px; font-size: 12px; color: #64748b; font-style: italic; outline: none; text-align: center;">اكتب توضيحاً أو ملاحظة للصورة هنا...</div>
           </div>
@@ -1177,10 +1228,22 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
               if (editorRef.current) {
                 pushHistorySnapshot(editorRef.current.innerHTML, false);
                 const imgBlock = `
-                  <div class="note-image-block" contenteditable="false" style="margin: 14px 0; text-align: center; position: relative;">
-                    <div style="position: relative; display: inline-block; max-width: 100%;">
-                      <img src="${dataUrl}" alt="لقطة شاشة توضيحية" style="max-width: 100%; height: auto; border-radius: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); display: block; margin: 0 auto;" />
-                      <button type="button" class="image-delete-btn" onclick="this.closest('.note-image-block').remove();" title="حذف الصورة">✕ حذف</button>
+                  <div class="note-image-block" contenteditable="false" style="margin: 16px 0; text-align: center; position: relative;">
+                    <div class="image-controls-toolbar" style="display: inline-flex; align-items: center; gap: 4px; background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(8px); padding: 4px 8px; border-radius: 12px; margin-bottom: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.2); direction: rtl;">
+                      <span style="font-size: 10px; color: #94a3b8; font-weight: bold; margin-left: 2px;">الحجم:</span>
+                      <button type="button" class="img-size-btn" onclick="window.__setNoteImgSize(this, 30)" title="حجم صغير">صغير 30%</button>
+                      <button type="button" class="img-size-btn" onclick="window.__setNoteImgSize(this, 60)" style="background: #6366f1;" title="حجم متوسط">متوسط 60%</button>
+                      <button type="button" class="img-size-btn" onclick="window.__setNoteImgSize(this, 85)" title="حجم كبير">كبير 85%</button>
+                      <button type="button" class="img-size-btn" onclick="window.__setNoteImgSize(this, 100)" title="حجم كامل">كامل 100%</button>
+                      <span style="width: 1px; height: 12px; background: rgba(255,255,255,0.2); margin: 0 3px;"></span>
+                      <button type="button" class="img-size-btn" onclick="window.__setNoteImgAlign(this, 'right')" title="محاذاة لليمين">يمين</button>
+                      <button type="button" class="img-size-btn" onclick="window.__setNoteImgAlign(this, 'center')" title="محاذاة بالوسط">وسط</button>
+                      <button type="button" class="img-size-btn" onclick="window.__setNoteImgAlign(this, 'left')" title="محاذاة لليسار">يسار</button>
+                      <span style="width: 1px; height: 12px; background: rgba(255,255,255,0.2); margin: 0 3px;"></span>
+                      <button type="button" class="image-delete-btn" onclick="this.closest('.note-image-block').remove();" title="حذف الصورة">✕</button>
+                    </div>
+                    <div class="note-image-wrapper" style="position: relative; display: inline-block; max-width: 60%; width: 60%; transition: all 0.25s ease;">
+                      <img src="${dataUrl}" alt="لقطة شاشة توضيحية" style="max-width: 100%; width: 100%; height: auto; border-radius: 14px; box-shadow: 0 4px 14px rgba(0,0,0,0.1); display: block; margin: 0 auto;" />
                     </div>
                     <div class="note-image-caption" contenteditable="true" style="margin-top: 6px; font-size: 12px; color: #64748b; font-style: italic; outline: none; text-align: center;">اكتب توضيحاً أو ملاحظة للصورة هنا...</div>
                   </div>

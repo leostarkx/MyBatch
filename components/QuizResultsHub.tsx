@@ -40,6 +40,7 @@ interface QuizResultsHubProps {
   ) => Promise<void>;
   onCreateExam?: (examData: Partial<Exam>) => Promise<void>;
   onDeleteExam?: (examId: string) => Promise<void>;
+  onUpdateStudentNickname?: (studentUid: string, nickname: string) => Promise<void>;
 }
 
 export const QuizResultsHub: React.FC<QuizResultsHubProps> = ({
@@ -54,6 +55,7 @@ export const QuizResultsHub: React.FC<QuizResultsHubProps> = ({
   onSaveQuizGrades,
   onCreateExam,
   onDeleteExam,
+  onUpdateStudentNickname,
 }) => {
   // Course Filter
   const [selectedCourseId, setSelectedCourseId] = useState<string>('ALL');
@@ -126,16 +128,23 @@ export const QuizResultsHub: React.FC<QuizResultsHubProps> = ({
 
   // Filtered students for grading table
   const filteredStudents = useMemo(() => {
-    return students.filter((s) => {
-      if (groupFilter !== 'ALL' && s.academicGroup !== groupFilter) return false;
-      if (studentSearchQuery.trim()) {
-        const q = studentSearchQuery.toLowerCase();
-        const matchName = s.name.toLowerCase().includes(q);
-        const matchId = s.studentId?.toLowerCase().includes(q);
-        if (!matchName && !matchId) return false;
-      }
-      return true;
-    });
+    return students
+      .filter((s) => {
+        if (groupFilter !== 'ALL' && s.academicGroup !== groupFilter) return false;
+        if (studentSearchQuery.trim()) {
+          const q = studentSearchQuery.toLowerCase();
+          const matchName = s.name.toLowerCase().includes(q);
+          const matchNick = s.repNickname?.toLowerCase().includes(q);
+          const matchId = s.studentId?.toLowerCase().includes(q);
+          if (!matchName && !matchNick && !matchId) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const nameA = a.repNickname?.trim() || a.name.trim();
+        const nameB = b.repNickname?.trim() || b.name.trim();
+        return nameA.localeCompare(nameB, 'ar', { sensitivity: 'base' });
+      });
   }, [students, groupFilter, studentSearchQuery]);
 
   // Computed Stats for the currently selected exam
@@ -793,8 +802,31 @@ export const QuizResultsHub: React.FC<QuizResultsHubProps> = ({
                                   </div>
                                 )}
                                 <div>
-                                  <h5 className="font-black text-sm text-gray-900 dark:text-white leading-tight">
-                                    {student.name}
+                                  <h5 className="font-black text-sm text-gray-900 dark:text-white leading-tight flex items-center gap-1.5 flex-wrap">
+                                    <span>{student.repNickname || student.name}</span>
+                                    {student.repNickname && (
+                                      <span className="text-[10px] text-gray-400 font-normal">
+                                        (الأصلي: {student.name})
+                                      </span>
+                                    )}
+                                    {canManageGrades && onUpdateStudentNickname && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const val = window.prompt(
+                                            'تعيين اسم/لقب الطالب الأبجدي للممثل:',
+                                            student.repNickname || student.name
+                                          );
+                                          if (val !== null) {
+                                            onUpdateStudentNickname(student.uid, val.trim());
+                                          }
+                                        }}
+                                        className="p-1 text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition cursor-pointer"
+                                        title="تعديل اسم أو لقب الطالب لترتيب الكشوفات"
+                                      >
+                                        <Edit3 size={11} />
+                                      </button>
+                                    )}
                                   </h5>
                                   <div className="flex items-center gap-2 mt-0.5">
                                     {student.academicGroup && (

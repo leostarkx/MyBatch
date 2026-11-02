@@ -121,21 +121,53 @@
   object-fit: contain;
 }
 
-.wysiwyg-editor .note-image-block .image-delete-btn {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  background: rgba(239, 68, 68, 0.9);
+.wysiwyg-editor .note-image-block .image-controls-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(15, 23, 42, 0.9);
+  backdrop-filter: blur(8px);
+  padding: 4px 8px;
+  border-radius: 12px;
+  margin-bottom: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  z-index: 10;
+  direction: rtl;
+}
+
+.formatted-html-renderer .image-controls-toolbar,
+.formatted-html-renderer .image-delete-btn {
+  display: none !important;
+}
+
+.wysiwyg-editor .img-size-btn {
+  background: rgba(255, 255, 255, 0.15);
   color: #fff;
   border: none;
-  border-radius: 8px;
-  padding: 4px 8px;
-  font-size: 11px;
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 10px;
   font-weight: 700;
   cursor: pointer;
-  opacity: 0.85;
+  transition: all 0.15s ease;
+}
+
+.wysiwyg-editor .img-size-btn:hover {
+  background: #6366f1;
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.wysiwyg-editor .note-image-block .image-delete-btn {
+  background: rgba(239, 68, 68, 0.95);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
   transition: opacity 0.2s ease, transform 0.2s ease;
-  z-index: 10;
   display: flex;
   align-items: center;
   gap: 4px;
