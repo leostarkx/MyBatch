@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Tab, UserRole, User } from '../types';
-import { Home, BookOpen, GraduationCap, MessageSquare, User as UserIcon, LogOut, Users, CalendarCheck, UserPlus, Layers, CheckSquare, Crown, Trophy, FileText, Inbox, Phone, Send, Instagram, X, Copy, Check, ExternalLink, Bell } from 'lucide-react';
+import { Home, BookOpen, GraduationCap, MessageSquare, User as UserIcon, LogOut, Users, CalendarCheck, UserPlus, Layers, CheckSquare, Crown, Trophy, FileText, Inbox, Phone, Send, Instagram, X, Copy, Check, ExternalLink, Bell, Shield, ChevronLeft } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 import { BatchLogo } from './BatchLogo';
 
@@ -30,6 +30,7 @@ const Layout: React.FC<LayoutProps> = ({
   joinRequestsCount = 0,
 }) => {
   const [isDevContactOpen, setIsDevContactOpen] = useState(false);
+  const [isMobileAdminOpen, setIsMobileAdminOpen] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const handleCopyContact = (value: string, key: string) => {
@@ -61,6 +62,13 @@ const Layout: React.FC<LayoutProps> = ({
     Tab.SUGGESTIONS,
     Tab.LEADERBOARD,
     Tab.PROJECTS,
+  ].includes(activeTab);
+
+  const isAdminTabActive = [
+    Tab.STUDENTS,
+    Tab.COURSES,
+    Tab.REQUESTS,
+    Tab.BATCHES,
   ].includes(activeTab);
 
   const isProfileActive = activeTab === Tab.PROFILE;
@@ -298,7 +306,7 @@ const Layout: React.FC<LayoutProps> = ({
               <button
                 type="button"
                 onClick={onOpenNotifications}
-                className="relative p-2 rounded-xl bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-200 hover:bg-primary/10 hover:text-primary transition"
+                className="relative p-2 rounded-xl bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-200 hover:bg-primary/10 hover:text-primary transition shrink-0 cursor-pointer"
                 title="الإشعارات"
               >
                 <Bell size={18} />
@@ -310,14 +318,34 @@ const Layout: React.FC<LayoutProps> = ({
               </button>
             )}
             <PWAInstallButton compact />
+            {isManager && (
+              <button
+                type="button"
+                onClick={() => setIsMobileAdminOpen(true)}
+                className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all shadow-sm cursor-pointer active:scale-95 shrink-0 ${
+                  isAdminTabActive
+                    ? 'bg-purple-600 text-white ring-2 ring-purple-400 ring-offset-1 dark:ring-offset-slate-800 shadow-purple-500/30'
+                    : 'bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800/60 hover:bg-purple-100'
+                }`}
+                title="لوحة تحكم وإدارة الدفعة"
+              >
+                <Shield size={14} className={isAdminTabActive ? 'text-white' : 'text-purple-600 dark:text-purple-400'} />
+                <span>الإدارة</span>
+                {joinRequestsCount > 0 && (
+                  <span className="min-w-[18px] h-[18px] px-1 bg-red-500 text-white rounded-full text-[10px] font-black flex items-center justify-center border-2 border-white dark:border-slate-800 animate-pulse">
+                    {joinRequestsCount > 9 ? '+9' : joinRequestsCount}
+                  </span>
+                )}
+              </button>
+            )}
             {onOpenRepModal && (
               <button
                 onClick={onOpenRepModal}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 text-xs font-bold border border-amber-200 dark:border-amber-800/40 hover:bg-amber-100 transition shadow-sm"
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 text-xs font-bold border border-amber-200 dark:border-amber-800/40 hover:bg-amber-100 transition shadow-sm shrink-0"
                 title="إدارة وتعيين الممثلين"
               >
                 <Crown size={15} className="text-amber-500" />
-                <span>الممثلين</span>
+                <span className="hidden xs:inline">الممثلين</span>
               </button>
             )}
           </div>
@@ -521,6 +549,207 @@ const Layout: React.FC<LayoutProps> = ({
               className="w-full py-2.5 rounded-2xl bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 text-gray-700 dark:text-gray-200 font-bold text-xs transition"
             >
               إغلاق
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Quick Admin Bottom Sheet */}
+      {isMobileAdminOpen && isManager && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+          onClick={() => setIsMobileAdminOpen(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-800 w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl border-t sm:border border-gray-100 dark:border-slate-700 p-5 space-y-4 max-h-[85vh] overflow-y-auto animate-in slide-in-from-bottom duration-200"
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+          >
+            {/* Sheet Handle for Mobile */}
+            <div className="w-12 h-1.5 bg-gray-200 dark:bg-slate-700 rounded-full mx-auto sm:hidden mb-1" />
+
+            {/* Sheet Header */}
+            <div className="flex items-center justify-between border-b border-gray-100 dark:border-slate-700 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-md shadow-purple-500/20">
+                  <Shield size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-gray-800 dark:text-white flex items-center gap-1.5">
+                    لوحة تحكم الإدارة
+                    <span className="text-[10px] bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded-full font-bold">
+                      {user.role === UserRole.OWNER ? 'المطور 💻' : user.role === UserRole.REPRESENTATIVE ? 'ممثل الدفعة 👑' : 'ممثل معاون 🎖️'}
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                    أدوات الممثل للتحكم بالطلبة والمواد والطلبات
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMobileAdminOpen(false)}
+                className="p-2 rounded-xl bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-gray-300 hover:bg-gray-200 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Management Actions */}
+            <div className="space-y-2">
+              {(user.role === UserRole.REPRESENTATIVE || user.role === UserRole.OWNER) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onTabChange(Tab.STUDENTS);
+                    setIsMobileAdminOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all text-right cursor-pointer ${
+                    activeTab === Tab.STUDENTS
+                      ? 'bg-purple-50 dark:bg-purple-950/50 border-purple-300 dark:border-purple-700 text-purple-900 dark:text-purple-200 shadow-sm'
+                      : 'bg-gray-50/70 dark:bg-slate-700/40 border-gray-100 dark:border-slate-700 hover:bg-purple-50/50 text-gray-800 dark:text-gray-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-purple-500 text-white flex items-center justify-center shadow-xs">
+                      <Users size={20} />
+                    </div>
+                    <div>
+                      <span className="text-sm font-black block">إدارة الطلاب</span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400 block">
+                        تعديل الألقاب والأسماء، تبديل الحسابات، وترتيب القوائم
+                      </span>
+                    </div>
+                  </div>
+                  <ChevronLeft size={18} className="text-gray-400 shrink-0" />
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  onTabChange(Tab.COURSES);
+                  setIsMobileAdminOpen(false);
+                }}
+                className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all text-right cursor-pointer ${
+                  activeTab === Tab.COURSES
+                    ? 'bg-purple-50 dark:bg-purple-950/50 border-purple-300 dark:border-purple-700 text-purple-900 dark:text-purple-200 shadow-sm'
+                    : 'bg-gray-50/70 dark:bg-slate-700/40 border-gray-100 dark:border-slate-700 hover:bg-purple-50/50 text-gray-800 dark:text-gray-200'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-500 text-white flex items-center justify-center shadow-xs">
+                    <Layers size={20} />
+                  </div>
+                  <div>
+                    <span className="text-sm font-black block">المواد الدراسية</span>
+                    <span className="text-xs text-gray-500 dark:text-gray-400 block">
+                      إدارة الكورسات، تقسيم الدرجات، وسعي الفصول
+                    </span>
+                  </div>
+                </div>
+                <ChevronLeft size={18} className="text-gray-400 shrink-0" />
+              </button>
+
+              {(user.role === UserRole.REPRESENTATIVE || user.role === UserRole.OWNER) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onTabChange(Tab.REQUESTS);
+                    setIsMobileAdminOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all text-right cursor-pointer ${
+                    activeTab === Tab.REQUESTS
+                      ? 'bg-purple-50 dark:bg-purple-950/50 border-purple-300 dark:border-purple-700 text-purple-900 dark:text-purple-200 shadow-sm'
+                      : 'bg-gray-50/70 dark:bg-slate-700/40 border-gray-100 dark:border-slate-700 hover:bg-purple-50/50 text-gray-800 dark:text-gray-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white flex items-center justify-center shadow-xs relative">
+                      <UserPlus size={20} />
+                      {joinRequestsCount > 0 && (
+                        <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-red-500 rounded-full border-2 border-white dark:border-slate-800 animate-ping" />
+                      )}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-black block">طلبات الانضمام</span>
+                        {joinRequestsCount > 0 && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-red-500 text-white animate-pulse">
+                            {joinRequestsCount} جديدة
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-gray-500 dark:text-gray-400 block">
+                        مراجعة وقبول أو رفض طلبات انضمام الطلبة
+                      </span>
+                    </div>
+                  </div>
+                  <ChevronLeft size={18} className="text-gray-400 shrink-0" />
+                </button>
+              )}
+
+              {onOpenRepModal && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobileAdminOpen(false);
+                    onOpenRepModal();
+                  }}
+                  className="w-full flex items-center justify-between p-3.5 rounded-2xl border bg-amber-50/60 dark:bg-amber-950/30 border-amber-200/70 dark:border-amber-800/50 hover:bg-amber-100/60 transition-all text-right cursor-pointer"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center shadow-xs">
+                      <Crown size={20} />
+                    </div>
+                    <div>
+                      <span className="text-sm font-black text-amber-900 dark:text-amber-200 block">
+                        إدارة وتعيين الممثلين
+                      </span>
+                      <span className="text-xs text-amber-700/80 dark:text-amber-400 block">
+                        توليد أكواد المعاونين ونقل الصلاحيات
+                      </span>
+                    </div>
+                  </div>
+                  <ChevronLeft size={18} className="text-amber-500 shrink-0" />
+                </button>
+              )}
+
+              {user.role === UserRole.OWNER && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onTabChange(Tab.BATCHES);
+                    setIsMobileAdminOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all text-right cursor-pointer ${
+                    activeTab === Tab.BATCHES
+                      ? 'bg-purple-50 dark:bg-purple-950/50 border-purple-300 dark:border-purple-700 text-purple-900 dark:text-purple-200 shadow-sm'
+                      : 'bg-gray-50/70 dark:bg-slate-700/40 border-gray-100 dark:border-slate-700 hover:bg-purple-50/50 text-gray-800 dark:text-gray-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-slate-800 dark:bg-slate-600 text-white flex items-center justify-center shadow-xs">
+                      <Layers size={20} />
+                    </div>
+                    <div>
+                      <span className="text-sm font-black block">النسخ والدفعات</span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400 block">
+                        إدارة نسخ النظام وقواعد البيانات
+                      </span>
+                    </div>
+                  </div>
+                  <ChevronLeft size={18} className="text-gray-400 shrink-0" />
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsMobileAdminOpen(false)}
+              className="w-full py-2.5 rounded-2xl bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 text-gray-700 dark:text-gray-200 font-bold text-xs transition cursor-pointer"
+            >
+              إغلاق القائمة
             </button>
           </div>
         </div>

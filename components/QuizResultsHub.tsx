@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   FileText,
   Award,
@@ -20,6 +20,8 @@ import {
   Info,
   Clock,
   Edit3,
+  RefreshCw,
+  RotateCcw,
 } from 'lucide-react';
 import { Course, Exam, Grade, User } from '../types';
 
@@ -96,10 +98,54 @@ export const QuizResultsHub: React.FC<QuizResultsHubProps> = ({
     return exams.find((e) => e.id === selectedExamId) || filteredExams[0] || null;
   }, [selectedExamId, filteredExams, exams]);
 
-  // Load existing grades into draft when activeExam changes
+  // Reference to prevent wiping draft while the user is actively entering or editing grades
+  const lastLoadedExamIdRef = useRef<string | null>(null);
+  const isDirtyRef = useRef<boolean>(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+  const [hasDraftRestored, setHasDraftRestored] = useState<boolean>(false);
+
+  // Helper to generate unique storage key for batch + exam
+  const getDraftStorageKey = (examId: string) => `draft_quiz_grades_${effectiveBatchCode}_${examId}`;
+
+  // Load existing grades into draft ONLY when activeExam changes to a different exam ID
   React.useEffect(() => {
-    if (activeExam) {
-      const assessmentKey = `exam_quiz_${activeExam.id}`;
+    if (!activeExam) return;
+    const examId = activeExam.id;
+
+    // CRITICAL FIX: If we are already editing this exam, NEVER wipe the user's active inputs due to background updates
+    if (lastLoadedExamIdRef.current === examId) {
+      return;
+    }
+
+    lastLoadedExamIdRef.current = examId;
+    isDirtyRef.current = false;
+    setHasUnsavedChanges(false);
+
+    // Check sessionStorage for any recovered uncommitted draft
+    let restoredFromStorage = false;
+    try {
+      const cached = sessionStorage.getItem(getDraftStorageKey(examId));
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && parsed.grades) {
+          setDraftGrades(parsed.grades);
+          if (typeof parsed.maxScore === 'number' && parsed.maxScore > 0) {
+            setDraftMaxScore(parsed.maxScore);
+          } else {
+            setDraftMaxScore(activeExam.maxScore || 10);
+          }
+          isDirtyRef.current = true;
+          setHasUnsavedChanges(true);
+          setHasDraftRestored(true);
+          restoredFromStorage = true;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not read cached draft:', e);
+    }
+
+    if (!restoredFromStorage) {
+      const assessmentKey = `exam_quiz_${examId}`;
       const existingExamGrades = grades.filter((g) => g.assessmentId === assessmentKey);
       const newDraft: Record<string, { score: string; notes: string }> = {};
 
@@ -113,9 +159,27 @@ export const QuizResultsHub: React.FC<QuizResultsHubProps> = ({
 
       setDraftGrades(newDraft);
       setDraftMaxScore(activeExam.maxScore || 10);
-      setSaveSuccessMsg(null);
+      setHasDraftRestored(false);
     }
-  }, [activeExam, grades, students]);
+
+    setSaveSuccessMsg(null);
+  }, [activeExam?.id, effectiveBatchCode]);
+
+  // Synchronize student additions without touching or resetting existing student drafts
+  React.useEffect(() => {
+    if (!activeExam) return;
+    setDraftGrades((prev) => {
+      let hasMissing = false;
+      const next = { ...prev };
+      students.forEach((s) => {
+        if (!(s.uid in next)) {
+          hasMissing = true;
+          next[s.uid] = { score: '', notes: '' };
+        }
+      });
+      return hasMissing ? next : prev;
+    });
+  }, [students, activeExam?.id]);
 
   // Unique groups among students
   const availableGroups = useMemo(() => {
@@ -190,15 +254,78 @@ export const QuizResultsHub: React.FC<QuizResultsHubProps> = ({
     return scoredStudents.slice(0, 3);
   }, [activeExam, grades, students]);
 
-  // Quick Score Setter for a student
+  // Quick Score Setter for a student with persistent backup
   const handleScoreChange = (studentId: string, val: string) => {
-    setDraftGrades((prev) => ({
-      ...prev,
-      [studentId]: {
-        ...prev[studentId],
-        score: val,
-      },
-    }));
+    isDirtyRef.current = true;
+    setHasUnsavedChanges(true);
+    setDraftGrades((prev) => {
+      const next = {
+        ...prev,
+        [studentId]: {
+          ...prev[studentId],
+          score: val,
+        },
+      };
+      if (activeExam) {
+        try {
+          sessionStorage.setItem(
+            getDraftStorageKey(activeExam.id),
+            JSON.stringify({ grades: next, maxScore: draftMaxScore })
+          );
+        } catch (_) {}
+      }
+      return next;
+    });
+  };
+
+  // Max score adjuster with persistent backup
+  const handleMaxScoreChange = (val: number) => {
+    const cleanVal = isNaN(val) || val <= 0 ? 10 : val;
+    isDirtyRef.current = true;
+    setHasUnsavedChanges(true);
+    setDraftMaxScore(cleanVal);
+    if (activeExam) {
+      try {
+        sessionStorage.setItem(
+          getDraftStorageKey(activeExam.id),
+          JSON.stringify({ grades: draftGrades, maxScore: cleanVal })
+        );
+      } catch (_) {}
+    }
+  };
+
+  // Manual Reload from Server
+  const handleReloadFromServer = (force = false) => {
+    if (!activeExam) return;
+    if (
+      !force &&
+      hasUnsavedChanges &&
+      !window.confirm('لديك تعديلات غير محفوظة، هل أنت متأكد من إعادة تحميل الدرجات المسجلة في السيرفر وإلغاء مسودتك الحالية؟')
+    ) {
+      return;
+    }
+    const examId = activeExam.id;
+    try {
+      sessionStorage.removeItem(getDraftStorageKey(examId));
+    } catch (_) {}
+
+    const assessmentKey = `exam_quiz_${examId}`;
+    const existingExamGrades = grades.filter((g) => g.assessmentId === assessmentKey);
+    const newDraft: Record<string, { score: string; notes: string }> = {};
+
+    students.forEach((s) => {
+      const found = existingExamGrades.find((g) => g.studentId === s.uid);
+      newDraft[s.uid] = {
+        score: found !== undefined && found.score !== null ? String(found.score) : '',
+        notes: '',
+      };
+    });
+
+    setDraftGrades(newDraft);
+    setDraftMaxScore(activeExam.maxScore || 10);
+    isDirtyRef.current = false;
+    setHasUnsavedChanges(false);
+    setHasDraftRestored(false);
   };
 
   // Handle Save / Publish
@@ -215,6 +342,15 @@ export const QuizResultsHub: React.FC<QuizResultsHubProps> = ({
         }));
 
       await onSaveQuizGrades(activeExam, formatted, draftMaxScore, publishNotification);
+
+      // Successfully saved - clear local cache & dirty states
+      try {
+        sessionStorage.removeItem(getDraftStorageKey(activeExam.id));
+      } catch (_) {}
+      isDirtyRef.current = false;
+      setHasUnsavedChanges(false);
+      setHasDraftRestored(false);
+
       setSaveSuccessMsg(
         publishNotification
           ? 'تم نشر وإعلان نتائج الكويز بنجاح وإشعار جميع طلاب الدفعة! 📢'
@@ -688,32 +824,72 @@ export const QuizResultsHub: React.FC<QuizResultsHubProps> = ({
                   {/* Grading Toolbar */}
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                     <div>
-                      <h4 className="text-base sm:text-lg font-black text-gray-900 dark:text-white flex items-center gap-2">
+                      <h4 className="text-base sm:text-lg font-black text-gray-900 dark:text-white flex items-center gap-2 flex-wrap">
                         <span>رصد وتعديل درجات الطلاب ✍️</span>
                         <span className="text-xs font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-md">
                           {filteredStudents.length} طالب
                         </span>
+                        {hasUnsavedChanges && (
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                            مسودة قيد التعديل (محمية محلياً ضد الرست)
+                          </span>
+                        )}
                       </h4>
                       <p className="text-xs text-gray-500 dark:text-gray-400">
                         أدخل درجات الطلاب مباشرة (يدعم الكسور مثل 8.5 أو 9.75)، ثم اضغط على زر النشر للإعلان والإشعار الفوري.
                       </p>
                     </div>
 
-                    {/* Max score adjuster */}
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-black text-gray-600 dark:text-gray-300 shrink-0">
-                        الدرجة القصوى للكويز:
-                      </span>
-                      <input
-                        type="number"
-                        min="1"
-                        max="100"
-                        value={draftMaxScore}
-                        onChange={(e) => setDraftMaxScore(Number(e.target.value) || 10)}
-                        className="w-16 px-2 py-1.5 rounded-xl border border-gray-200 dark:border-slate-600 text-center font-black text-sm bg-gray-50 dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
+                    {/* Max score adjuster & reload */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex items-center gap-2 bg-gray-50 dark:bg-slate-900/80 px-3 py-1.5 rounded-2xl border border-gray-200 dark:border-slate-700">
+                        <span className="text-xs font-black text-gray-600 dark:text-gray-300 shrink-0">
+                          الدرجة القصوى:
+                        </span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={draftMaxScore}
+                          onChange={(e) => handleMaxScoreChange(Number(e.target.value))}
+                          className="w-16 px-2 py-1 rounded-xl border border-gray-200 dark:border-slate-600 text-center font-black text-sm bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleReloadFromServer(false)}
+                        className="p-2 px-3 rounded-2xl border border-gray-200 dark:border-slate-700 hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-600 dark:text-gray-300 transition flex items-center gap-1.5 text-xs font-bold cursor-pointer"
+                        title="إعادة تحميل الدرجات المسجلة في السيرفر"
+                      >
+                        <RefreshCw size={14} />
+                        <span className="hidden sm:inline">تحديث من السيرفر</span>
+                      </button>
                     </div>
                   </div>
+
+                  {/* Restored draft notice */}
+                  {hasDraftRestored && (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 text-xs text-indigo-900 dark:text-indigo-200">
+                      <div className="flex items-center gap-2">
+                        <Sparkles size={16} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        <span>
+                          <strong>تم استعادة مسودتك السابقة تلقائياً:</strong> تم استرجاع الدرجات والدرجة القصوى التي كنت تكتبها لحمايتها من الضياع.
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleReloadFromServer(true)}
+                          className="px-3 py-1 rounded-xl text-[11px] font-bold bg-white dark:bg-slate-800 border border-indigo-200 dark:border-indigo-700 text-rose-600 dark:text-rose-400 hover:bg-rose-50 transition cursor-pointer flex items-center gap-1"
+                        >
+                          <RotateCcw size={12} />
+                          <span>إلغاء واستعادة السيرفر</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Filters: Search & Group */}
                   <div className="flex flex-col sm:flex-row gap-2.5">
