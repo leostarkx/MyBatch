@@ -33,8 +33,14 @@ import {
   AlertCircle,
   Quote,
   Pilcrow,
+  Code,
+  Code2,
+  Terminal,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { FormattedTextRenderer } from './FormattedTextRenderer';
+import { SUPPORTED_LANGUAGES, SupportedLanguage, normalizeLanguage } from '../services/syntaxHighlighter';
 
 export interface RichTextEditorProps {
   value: string;
@@ -164,6 +170,26 @@ if (typeof window !== 'undefined') {
       editor.dispatchEvent(new Event('input', { bubbles: true }));
     }
   };
+
+  (window as any).__copyAcademicCode = (btn: HTMLElement) => {
+    const wrapper = btn.closest('.academic-code-wrapper');
+    if (!wrapper) return;
+    const codeElem = wrapper.querySelector('pre code') || wrapper.querySelector('pre');
+    const textToCopy = codeElem ? (codeElem.textContent || '') : '';
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(textToCopy).then(() => {
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '✓ تم النسخ!';
+        btn.style.color = '#34d399';
+        btn.style.background = 'rgba(52, 211, 153, 0.2)';
+        setTimeout(() => {
+          btn.innerHTML = originalText;
+          btn.style.color = '#cbd5e1';
+          btn.style.background = 'rgba(255, 255, 255, 0.1)';
+        }, 2000);
+      });
+    }
+  };
 }
 
 export const RichTextEditor: React.FC<RichTextEditorProps> = ({
@@ -186,6 +212,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   const [showSizePicker, setShowSizePicker] = useState(false);
   const [showAlignPicker, setShowAlignPicker] = useState(false);
   const [showCalloutPicker, setShowCalloutPicker] = useState(false);
+  const [showCodePicker, setShowCodePicker] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
 
   // Status feedback
@@ -208,6 +235,8 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
     justifyRight: false,
     justifyCenter: false,
     justifyLeft: false,
+    inlineCode: false,
+    codeBlock: false,
     block: null as 'h1' | 'h2' | 'h3' | 'p' | 'blockquote' | null,
   });
 
@@ -366,6 +395,30 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
     updateHistoryState();
   }, [notifyChange, updateHistoryState]);
 
+  // Helper to find enclosing inline code element
+  const findEnclosingInlineCode = useCallback((node: Node | null): HTMLElement | null => {
+    let curr = node;
+    while (curr && curr !== editorRef.current) {
+      if (curr instanceof HTMLElement && (curr.tagName.toLowerCase() === 'code' || curr.classList.contains('inline-code'))) {
+        return curr;
+      }
+      curr = curr.parentNode;
+    }
+    return null;
+  }, []);
+
+  // Helper to find enclosing code block wrapper
+  const findEnclosingCodeBlock = useCallback((node: Node | null): HTMLElement | null => {
+    let curr = node;
+    while (curr && curr !== editorRef.current) {
+      if (curr instanceof HTMLElement && (curr.classList.contains('academic-code-wrapper') || curr.tagName.toLowerCase() === 'pre')) {
+        return curr;
+      }
+      curr = curr.parentNode;
+    }
+    return null;
+  }, []);
+
   // Helper to find enclosing blockquote
   const findEnclosingBlockquote = useCallback((node: Node | null): HTMLElement | null => {
     let curr = node;
@@ -459,6 +512,17 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
     const currentBlock = detectActiveBlock();
     const isBold = checkBoldState();
 
+    let isInlineCode = false;
+    let isCodeBlock = false;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && editorRef.current) {
+      const range = sel.getRangeAt(0);
+      if (editorRef.current.contains(range.commonAncestorContainer)) {
+        isInlineCode = !!(findEnclosingInlineCode(range.startContainer) || findEnclosingInlineCode(range.commonAncestorContainer));
+        isCodeBlock = !!(findEnclosingCodeBlock(range.startContainer) || findEnclosingCodeBlock(range.commonAncestorContainer));
+      }
+    }
+
     // Query active formats
     try {
       setActiveFormats({
@@ -471,6 +535,8 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
         justifyRight: document.queryCommandState('justifyRight'),
         justifyCenter: document.queryCommandState('justifyCenter'),
         justifyLeft: document.queryCommandState('justifyLeft'),
+        inlineCode: isInlineCode,
+        codeBlock: isCodeBlock,
         block: currentBlock,
       });
     } catch {
@@ -492,7 +558,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       setHasSelection(false);
       setSelectedTextSnippet('');
     }
-  }, [saveCurrentSelection, detectActiveBlock, checkBoldState]);
+  }, [saveCurrentSelection, detectActiveBlock, checkBoldState, findEnclosingInlineCode, findEnclosingCodeBlock]);
 
   // Listen to native selectionchange so selection and active formats are always in sync
   useEffect(() => {
@@ -632,6 +698,25 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       }
     }
 
+    // Handle Tab and Enter inside academic code block to preserve code indentation
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && editorRef.current) {
+      const range = sel.getRangeAt(0);
+      const codeBlock = findEnclosingCodeBlock(range.startContainer);
+      if (codeBlock) {
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          document.execCommand('insertText', false, '    ');
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          document.execCommand('insertLineBreak');
+          return;
+        }
+      }
+    }
+
     if (modKey && !e.altKey) {
       if (e.key === 'z' || e.key === 'Z') {
         e.preventDefault();
@@ -660,6 +745,11 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       if (e.key === 'u' || e.key === 'U') {
         e.preventDefault();
         execCmd('underline');
+        return;
+      }
+      if (e.key === 'e' || e.key === 'E' || e.key === '`') {
+        e.preventDefault();
+        toggleInlineCode();
         return;
       }
     }
@@ -1057,6 +1147,16 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       }
     });
 
+    // 6. Unwrap any selected inline code
+    const codes = editorRef.current.querySelectorAll('.inline-code, code:not(.code-pre-block code)');
+    codes.forEach((c) => {
+      if (sel && sel.containsNode(c, true)) {
+        const parent = c.parentNode;
+        while (c.firstChild) parent?.insertBefore(c.firstChild, c);
+        parent?.removeChild(c);
+      }
+    });
+
     const updatedHtml = editorRef.current.innerHTML;
     pushHistorySnapshot(updatedHtml, false);
     notifyChange(updatedHtml, false);
@@ -1092,6 +1192,134 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
     notifyChange(updatedHtml, false);
     handleSelectionCheck();
   };
+
+  // Toggle Inline Code formatting (like Bold or Italic)
+  const toggleInlineCode = useCallback(() => {
+    if (!editorRef.current) return;
+    restoreSavedSelection();
+    editorRef.current.focus();
+
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (!editorRef.current.contains(range.commonAncestorContainer)) return;
+
+    pushHistorySnapshot(editorRef.current.innerHTML, false);
+
+    const enclosingCode = findEnclosingInlineCode(range.startContainer) || findEnclosingInlineCode(range.commonAncestorContainer);
+
+    if (enclosingCode) {
+      // Toggle OFF: Unwrap code element back to text
+      const parent = enclosingCode.parentNode;
+      if (parent) {
+        const frag = document.createDocumentFragment();
+        while (enclosingCode.firstChild) {
+          frag.appendChild(enclosingCode.firstChild);
+        }
+        parent.replaceChild(frag, enclosingCode);
+      }
+    } else {
+      // Toggle ON: Wrap in <code class="inline-code">
+      if (range.collapsed) {
+        const codeNode = document.createElement('code');
+        codeNode.className = 'inline-code font-mono text-[12px] bg-slate-800 text-cyan-300 dark:bg-slate-900 dark:text-cyan-300 px-1.5 py-0.5 rounded border border-slate-700/60 font-semibold inline-block';
+        codeNode.setAttribute('dir', 'ltr');
+        codeNode.textContent = 'code';
+        range.insertNode(codeNode);
+
+        const newRange = document.createRange();
+        newRange.selectNodeContents(codeNode);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+        savedSelectionRangeRef.current = newRange.cloneRange();
+      } else {
+        const codeNode = document.createElement('code');
+        codeNode.className = 'inline-code font-mono text-[12px] bg-slate-800 text-cyan-300 dark:bg-slate-900 dark:text-cyan-300 px-1.5 py-0.5 rounded border border-slate-700/60 font-semibold inline-block';
+        codeNode.setAttribute('dir', 'ltr');
+        const contents = range.extractContents();
+        codeNode.appendChild(contents);
+        range.insertNode(codeNode);
+
+        const newRange = document.createRange();
+        newRange.selectNode(codeNode);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+        savedSelectionRangeRef.current = newRange.cloneRange();
+      }
+    }
+
+    const updatedHtml = editorRef.current.innerHTML;
+    pushHistorySnapshot(updatedHtml, false);
+    notifyChange(updatedHtml, false);
+    handleSelectionCheck();
+    setShowCodePicker(false);
+  }, [restoreSavedSelection, pushHistorySnapshot, findEnclosingInlineCode, notifyChange, handleSelectionCheck]);
+
+  // Insert or convert to multi-line academic code block
+  const insertCodeBlock = useCallback((lang: SupportedLanguage) => {
+    if (!editorRef.current) return;
+    restoreSavedSelection();
+    editorRef.current.focus();
+
+    const sel = window.getSelection();
+    let initialText = '';
+    if (sel && sel.rangeCount > 0) {
+      initialText = sel.toString().trim();
+    }
+
+    const langInfo = SUPPORTED_LANGUAGES.find((l) => l.id === lang) || SUPPORTED_LANGUAGES[0];
+
+    let codeContent = initialText;
+    if (!codeContent) {
+      if (lang === 'cpp') {
+        codeContent = `// اكتب كود C++ هنا\n#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << "مرحباً بكم في مقرر C++" << endl;\n    return 0;\n}`;
+      } else if (lang === 'c') {
+        codeContent = `// اكتب كود C هنا\n#include <stdio.h>\n\nint main() {\n    printf("برمجة بلغة C\\n");\n    return 0;\n}`;
+      } else if (lang === 'python') {
+        codeContent = `# اكتب كود بايثون هنا\ndef main():\n    print("أهلاً بكم في بايثون!")\n\nif __name__ == "__main__":\n    main()`;
+      } else if (lang === 'java') {
+        codeContent = `// اكتب كود Java هنا\npublic class Solution {\n    public static void main(String[] args) {\n        System.out.println("مرحباً بكم في Java");\n    }\n}`;
+      } else if (lang === 'sql') {
+        codeContent = `-- اكتب استعلام SQL هنا\nSELECT student_id, full_name, gpa\nFROM students\nWHERE gpa >= 3.0\nORDER BY gpa DESC;`;
+      } else if (lang === 'javascript') {
+        codeContent = `// كود جافاسكريبت\nfunction greet(name) {\n    return \`مرحباً \${name}\`;\n}\nconsole.log(greet("يا دفعتنا"));`;
+      } else {
+        codeContent = `// اكتب الكود البرمجي هنا...`;
+      }
+    }
+
+    pushHistorySnapshot(editorRef.current.innerHTML, false);
+
+    const safeEscaped = codeContent
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    const blockHtml = `
+      <div class="academic-code-wrapper" data-code-block="true" data-language="${langInfo.id}" dir="ltr" style="margin: 16px 0; background: #0f172a; border-radius: 14px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.25); text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">
+        <div class="code-header-bar" contenteditable="false" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; background: #1e293b; border-bottom: 1px solid #334155; user-select: none; direction: ltr;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; background: ${langInfo.color}; color: #ffffff; font-size: 11px; font-weight: bold; letter-spacing: 0.5px;">${langInfo.badge}</span>
+            <span style="font-size: 11px; color: #94a3b8; font-family: sans-serif;">${langInfo.name}</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <button type="button" class="code-copy-btn" onclick="window.__copyAcademicCode(this)" style="padding: 3px 8px; border-radius: 6px; background: rgba(255,255,255,0.1); color: #cbd5e1; font-size: 11px; cursor: pointer; border: none; font-family: sans-serif;" title="نسخ الكود">📋 نسخ</button>
+            <button type="button" class="code-del-btn" onclick="this.closest('.academic-code-wrapper').remove()" style="padding: 3px 6px; border-radius: 6px; background: rgba(239,68,68,0.2); color: #f87171; font-size: 11px; cursor: pointer; border: none;" title="حذف صندوق الكود">✕</button>
+          </div>
+        </div>
+        <pre class="code-pre-block" style="margin: 0; padding: 14px 16px; overflow-x: auto; color: #f8fafc; font-size: 13px; line-height: 1.6; tab-size: 4; white-space: pre; outline: none; background: transparent;" contenteditable="true" spellcheck="false"><code>${safeEscaped}</code></pre>
+      </div>
+      <p><br></p>
+    `;
+
+    document.execCommand('insertHTML', false, blockHtml);
+
+    const updatedHtml = editorRef.current.innerHTML;
+    pushHistorySnapshot(updatedHtml, false);
+    notifyChange(updatedHtml, true);
+    handleSelectionCheck();
+    setShowCodePicker(false);
+  }, [restoreSavedSelection, pushHistorySnapshot, notifyChange, handleSelectionCheck]);
 
   // Apply font sizes or headings
   const applyFontSize = (type: 'h1' | 'h2' | 'h3' | 'large' | 'normal' | 'small' | 'blockquote') => {
@@ -1300,6 +1528,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       setShowSizePicker(false);
       setShowAlignPicker(false);
       setShowCalloutPicker(false);
+      setShowCodePicker(false);
     };
     window.addEventListener('click', handleGlobalClick);
     return () => window.removeEventListener('click', handleGlobalClick);
@@ -1483,6 +1712,85 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
             >
               <Strikethrough size={15} />
             </button>
+
+            {/* Code Formatting Dropdown (Inline Code & Code Blocks) */}
+            <div className="relative" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setShowCodePicker(!showCodePicker);
+                  setShowColorPicker(false);
+                  setShowMarkerPicker(false);
+                  setShowSizePicker(false);
+                  setShowAlignPicker(false);
+                  setShowCalloutPicker(false);
+                }}
+                className={`p-1.5 rounded-lg transition flex items-center gap-1 text-xs font-black ${
+                  activeFormats.inlineCode || activeFormats.codeBlock || showCodePicker
+                    ? 'bg-primary/20 text-primary border border-primary/30 shadow-xs'
+                    : 'hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-800 dark:text-gray-200'
+                }`}
+                title="تنسيق كود برمجي (Ctrl+E لكود السطر، أو إدراج كتلة برمجية كاملة)"
+              >
+                <Code size={15} />
+                <span className="hidden sm:inline text-[11px] font-sans font-bold">كود</span>
+                <ChevronDown size={11} className="opacity-60" />
+              </button>
+
+              {showCodePicker && (
+                <div className="absolute top-full mt-1.5 z-40 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-gray-100 dark:border-slate-700 p-2.5 w-64 space-y-2 animate-in zoom-in-95 text-right rtl">
+                  <div>
+                    <span className="text-[10px] font-bold text-gray-400 block mb-1">
+                      تنسيق سريع للنص المحدد:
+                    </span>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={toggleInlineCode}
+                      className={`w-full text-right px-2.5 py-1.5 rounded-xl transition text-xs font-bold flex items-center justify-between ${
+                        activeFormats.inlineCode
+                          ? 'bg-primary/15 text-primary border border-primary/20'
+                          : 'hover:bg-gray-50 dark:hover:bg-slate-700 text-gray-800 dark:text-white'
+                      }`}
+                      title="تحويل النص المحدد إلى كود مضمن أو العكس"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Code2 size={14} className="text-primary" />
+                        <span>كود مضمن في السطر (Inline)</span>
+                      </div>
+                      <span className="text-[10px] bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-gray-400 px-1.5 py-0.5 rounded font-mono">
+                        Ctrl+E
+                      </span>
+                    </button>
+                  </div>
+
+                  <div className="border-t border-gray-100 dark:border-slate-700 pt-2">
+                    <span className="text-[10px] font-bold text-gray-400 block mb-1.5">
+                      إدراج صندوق كود تخصصي (Code Block):
+                    </span>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {SUPPORTED_LANGUAGES.map((lang) => (
+                        <button
+                          key={lang.id}
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => insertCodeBlock(lang.id)}
+                          className="px-2 py-1.5 rounded-xl border border-gray-200/70 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700 text-xs font-bold flex items-center gap-1.5 transition text-gray-800 dark:text-gray-200"
+                          title={`كود بلغة ${lang.name}`}
+                        >
+                          <span
+                            className="w-2.5 h-2.5 rounded-full shrink-0"
+                            style={{ backgroundColor: lang.color }}
+                          />
+                          <span className="truncate">{lang.name.split(' ')[0]}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
 
             <span className="w-px h-4 bg-gray-300 dark:bg-slate-700 mx-0.5" />
 

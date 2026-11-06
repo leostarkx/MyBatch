@@ -27,6 +27,8 @@ import {
   showBrowserPushNotification,
   notifyUserIfAllowed,
   broadcastBatchNotification,
+  getAlertedNotificationIds,
+  markNotificationIdsAsAlerted,
 } from "./services/notificationService";
 import {
   markNotificationAsReadInFirestore,
@@ -1147,25 +1149,40 @@ export default function App() {
       return;
     }
 
-    knownNotifIdsRef.current.clear();
+    const currentUid = currentUser.uid;
+    // Load previously alerted notification IDs from storage so past alerts are never re-triggered
+    const alertedIds = getAlertedNotificationIds(currentUid);
+    knownNotifIdsRef.current = new Set(alertedIds);
     isInitialNotifLoadRef.current = true;
 
-    const unsubNotifs = subscribeNotifications(currentUser.uid, (items) => {
+    const unsubNotifs = subscribeNotifications(currentUid, (items) => {
       setNotifications(items);
 
       if (isInitialNotifLoadRef.current) {
-        items.forEach((n) => knownNotifIdsRef.current.add(n.id));
+        // On initial snapshot/cache load, register all existing IDs so they don't pop up as alerts
+        items.forEach((n) => {
+          knownNotifIdsRef.current.add(n.id);
+        });
+        markNotificationIdsAsAlerted(currentUid, items.map((n) => n.id));
         isInitialNotifLoadRef.current = false;
         return;
       }
 
-      // Detect newly arrived unread notifications
+      // Detect newly arrived unread notifications that haven't been alerted yet
       const newlyArrived = items.filter(
         (n) => !knownNotifIdsRef.current.has(n.id) && !n.isRead
       );
+
+      // Register all incoming IDs immediately
       items.forEach((n) => knownNotifIdsRef.current.add(n.id));
 
       if (newlyArrived.length > 0) {
+        // Mark all newly arrived notification IDs as alerted immediately in persistent storage
+        markNotificationIdsAsAlerted(
+          currentUid,
+          newlyArrived.map((n) => n.id)
+        );
+
         const latest = newlyArrived[0];
         const activeUser = currentUserRef.current;
         const prefs = getUserNotificationPreferences(activeUser);
@@ -1187,6 +1204,15 @@ export default function App() {
     });
     return () => unsubNotifs();
   }, [currentUser?.uid]);
+
+  // Auto-dismiss live toast notification banner after 6 seconds to prevent stuck toast
+  useEffect(() => {
+    if (!liveToastNotif) return;
+    const toastTimer = setTimeout(() => {
+      setLiveToastNotif(null);
+    }, 6000);
+    return () => clearTimeout(toastTimer);
+  }, [liveToastNotif?.id]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -4598,6 +4624,7 @@ export default function App() {
   };
 
   const handleCreateExam = async (examData: Partial<Exam>) => {
+    const maxScore = examData.maxScore || 10;
     const newExam: Exam = {
       id: `exam_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       batchCode: effectiveBatchCode,
@@ -4605,7 +4632,9 @@ export default function App() {
       courseId: examData.courseId || '',
       courseName: examData.courseName || '',
       type: examData.type || 'QUIZ',
-      maxScore: examData.maxScore || 10,
+      maxScore,
+      passScore: typeof examData.passScore === 'number' ? examData.passScore : Math.round((maxScore / 2) * 10) / 10,
+      visibility: examData.visibility || 'PUBLIC',
       examDate: examData.examDate || new Date().toISOString().split('T')[0],
       examTimestamp: examData.examTimestamp || Date.now(),
       topics: examData.topics,
@@ -4615,6 +4644,11 @@ export default function App() {
     };
     await saveExamToFirestore(newExam);
     setExams((prev) => [newExam, ...prev]);
+  };
+
+  const handleUpdateExam = async (updatedExam: Exam) => {
+    await saveExamToFirestore(updatedExam);
+    setExams((prev) => prev.map((e) => (e.id === updatedExam.id ? updatedExam : e)));
   };
 
   const handleDeleteQuizExam = async (examId: string) => {
@@ -4651,6 +4685,7 @@ export default function App() {
         effectiveBatchCode={effectiveBatchCode || ''}
         onSaveQuizGrades={handleSaveQuizGrades}
         onCreateExam={handleCreateExam}
+        onUpdateExam={handleUpdateExam}
         onDeleteExam={handleDeleteQuizExam}
         onUpdateStudentNickname={handleUpdateStudentNickname}
       />

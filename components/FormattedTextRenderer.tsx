@@ -9,13 +9,116 @@ import {
   Info,
   Pin,
   Quote as QuoteIcon,
+  Copy,
+  Check,
+  Code,
+  Terminal,
 } from "lucide-react";
+import {
+  highlightCode,
+  SUPPORTED_LANGUAGES,
+  SupportedLanguage,
+  normalizeLanguage,
+} from "../services/syntaxHighlighter";
 
 interface FormattedTextRendererProps {
   content: string;
   className?: string;
   compact?: boolean;
 }
+
+export interface AcademicCodeBlockProps {
+  code: string;
+  language?: string;
+  compact?: boolean;
+}
+
+export const AcademicCodeBlock: React.FC<AcademicCodeBlockProps> = ({
+  code,
+  language = 'plaintext',
+  compact = false,
+}) => {
+  const [copied, setCopied] = useState(false);
+  const normalizedLang = normalizeLanguage(language);
+  const langConfig =
+    SUPPORTED_LANGUAGES.find((l) => l.id === normalizedLang) || SUPPORTED_LANGUAGES[0];
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(code).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      });
+    }
+  };
+
+  const lines = code.split('\n');
+  const highlightedHtml = highlightCode(code, normalizedLang);
+  const highlightedLines = highlightedHtml.split('\n');
+
+  return (
+    <div
+      dir="ltr"
+      className="academic-code-block-rendered my-3 rounded-2xl border border-slate-700/80 bg-slate-900 overflow-hidden shadow-md text-left font-mono select-text"
+    >
+      {/* Header bar */}
+      <div className="flex items-center justify-between px-3.5 py-2 bg-slate-800/95 border-b border-slate-700/80 text-xs text-slate-300 select-none">
+        <div className="flex items-center gap-2">
+          <span
+            className="px-2 py-0.5 rounded-md text-[10px] font-black text-white shadow-xs tracking-wider"
+            style={{ backgroundColor: langConfig.color }}
+          >
+            {langConfig.badge}
+          </span>
+          <span className="text-[11px] font-semibold text-slate-300 font-sans">
+            {langConfig.name}
+          </span>
+          <span className="text-[10px] text-slate-500 font-sans">
+            ({lines.length} {lines.length === 1 ? 'سطر' : 'أسطر'})
+          </span>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleCopy}
+          className={`academic-copy-code-btn px-2.5 py-1 rounded-lg transition text-[11px] font-bold flex items-center gap-1.5 cursor-pointer font-sans ${
+            copied
+              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+              : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/5'
+          }`}
+          title="نسخ الكود إلى الحافظة"
+        >
+          {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+          <span>{copied ? 'تم النسخ!' : 'نسخ الكود'}</span>
+        </button>
+      </div>
+
+      {/* Code body with line numbers */}
+      <div className="flex overflow-x-auto text-[12.5px] leading-[1.6] py-3 px-1">
+        {/* Line Numbers Gutter */}
+        <div
+          aria-hidden="true"
+          className="select-none text-slate-500/80 text-right pr-3 pl-2 border-r border-slate-800 text-[11px] font-mono leading-[1.6] shrink-0"
+        >
+          {lines.map((_, i) => (
+            <div key={i}>{i + 1}</div>
+          ))}
+        </div>
+
+        {/* Code Content */}
+        <div className="pl-3.5 pr-4 flex-1 whitespace-pre font-mono text-slate-100">
+          {highlightedLines.map((lineHtml, i) => (
+            <div
+              key={i}
+              dangerouslySetInnerHTML={{ __html: lineHtml || '&nbsp;' }}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // Color map for tags like [color=red]...[/color]
 const COLOR_CLASSES: Record<string, string> = {
@@ -88,6 +191,100 @@ export const FormattedTextRenderer: React.FC<FormattedTextRendererProps> = React
     const container = htmlContainerRef.current;
     if (!container) return;
 
+    // Enhance and highlight academic code blocks and pre elements
+    const codeBlocks = container.querySelectorAll<HTMLElement>(
+      '.academic-code-wrapper, pre.code-pre-block, pre:not(.academic-code-block-rendered pre)'
+    );
+    codeBlocks.forEach((block) => {
+      if (block.getAttribute('data-syntax-rendered') === 'true') return;
+      block.setAttribute('data-syntax-rendered', 'true');
+
+      let rawCode = '';
+      let lang = block.getAttribute('data-language') || 'plaintext';
+
+      const preElem = block.tagName.toLowerCase() === 'pre' ? block : block.querySelector('pre');
+      if (!preElem) return;
+
+      const codeChild = preElem.querySelector('code');
+      if (codeChild && codeChild.className) {
+        const match = codeChild.className.match(/language-([a-z0-9+#]+)/i);
+        if (match) lang = match[1];
+      }
+
+      rawCode = (codeChild ? codeChild.textContent : preElem.textContent) || '';
+      if (!rawCode.trim()) return;
+
+      const normLang = normalizeLanguage(lang);
+      const langConfig =
+        SUPPORTED_LANGUAGES.find((l) => l.id === normLang) || SUPPORTED_LANGUAGES[0];
+      const highlightedHtml = highlightCode(rawCode, normLang);
+
+      const lines = rawCode.split('\n');
+      const highlightedLines = highlightedHtml.split('\n');
+
+      const enhancedWrapper = document.createElement('div');
+      enhancedWrapper.className =
+        'academic-code-block-rendered my-3 rounded-2xl border border-slate-700/80 bg-slate-900 overflow-hidden shadow-md text-left font-mono select-text';
+      enhancedWrapper.setAttribute('dir', 'ltr');
+
+      const header = document.createElement('div');
+      header.className =
+        'flex items-center justify-between px-3.5 py-2 bg-slate-800/95 border-b border-slate-700/80 text-xs text-slate-300 select-none';
+
+      const leftSide = document.createElement('div');
+      leftSide.className = 'flex items-center gap-2';
+      leftSide.innerHTML = `
+        <span class="px-2 py-0.5 rounded-md text-[10px] font-black text-white shadow-xs tracking-wider" style="background-color: ${langConfig.color}">${langConfig.badge}</span>
+        <span class="text-[11px] font-semibold text-slate-300 font-sans">${langConfig.name}</span>
+        <span class="text-[10px] text-slate-500 font-sans">(${lines.length} ${lines.length === 1 ? 'سطر' : 'أسطر'})</span>
+      `;
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className =
+        'academic-copy-code-btn px-2.5 py-1 rounded-lg transition text-[11px] font-bold flex items-center gap-1.5 cursor-pointer font-sans bg-white/10 hover:bg-white/15 text-slate-200 border border-white/5';
+      copyBtn.title = 'نسخ الكود إلى الحافظة';
+      copyBtn.innerHTML = `<span>نسخ الكود</span>`;
+
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(rawCode).then(() => {
+            copyBtn.innerHTML = `<span style="color:#34d399">✓ تم النسخ!</span>`;
+            copyBtn.classList.add('bg-emerald-500/20', 'text-emerald-400');
+            setTimeout(() => {
+              copyBtn.innerHTML = `<span>نسخ الكود</span>`;
+              copyBtn.classList.remove('bg-emerald-500/20', 'text-emerald-400');
+            }, 2000);
+          });
+        }
+      });
+
+      header.appendChild(leftSide);
+      header.appendChild(copyBtn);
+
+      const body = document.createElement('div');
+      body.className = 'flex overflow-x-auto text-[12.5px] leading-[1.6] py-3 px-1';
+
+      const lineNums = document.createElement('div');
+      lineNums.setAttribute('aria-hidden', 'true');
+      lineNums.className =
+        'select-none text-slate-500/80 text-right pr-3 pl-2 border-r border-slate-800 text-[11px] font-mono leading-[1.6] shrink-0';
+      lineNums.innerHTML = lines.map((_, i) => `<div>${i + 1}</div>`).join('');
+
+      const codeArea = document.createElement('div');
+      codeArea.className = 'pl-3.5 pr-4 flex-1 whitespace-pre font-mono text-slate-100';
+      codeArea.innerHTML = highlightedLines.map((l) => `<div>${l || '&nbsp;'}</div>`).join('');
+
+      body.appendChild(lineNums);
+      body.appendChild(codeArea);
+
+      enhancedWrapper.appendChild(header);
+      enhancedWrapper.appendChild(body);
+
+      block.parentNode?.replaceChild(enhancedWrapper, block);
+    });
+
     const handleClick = (e: MouseEvent) => {
       const spoilerTarget = (e.target as HTMLElement).closest(".telegram-spoiler");
       if (spoilerTarget) {
@@ -154,22 +351,45 @@ export const FormattedTextRenderer: React.FC<FormattedTextRendererProps> = React
   // Split content into blocks: Callouts, Quotes, Headers, Lists, Paragraphs
   const lines = content.split("\n");
   const blocks: {
-    type: "quote" | "header" | "bullet" | "number" | "checklist" | "alert" | "tip" | "note" | "text";
+    type: "quote" | "header" | "bullet" | "number" | "checklist" | "alert" | "tip" | "note" | "code" | "text";
     lines: string[];
     headerLevel?: number;
+    language?: string;
   }[] = [];
 
   let currentBlock: {
-    type: "quote" | "header" | "bullet" | "number" | "checklist" | "alert" | "tip" | "note" | "text";
+    type: "quote" | "header" | "bullet" | "number" | "checklist" | "alert" | "tip" | "note" | "code" | "text";
     lines: string[];
     headerLevel?: number;
+    language?: string;
   } | null = null;
 
   let inCallout: "alert" | "tip" | "note" | null = null;
+  let inCodeBlock: string | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const rawLine = lines[i];
     const trimmed = rawLine.trim();
+
+    // Code block fences (```lang ... ```)
+    if (inCodeBlock !== null) {
+      if (trimmed.startsWith("```")) {
+        if (currentBlock) blocks.push(currentBlock);
+        currentBlock = null;
+        inCodeBlock = null;
+        continue;
+      }
+      currentBlock?.lines.push(rawLine);
+      continue;
+    }
+
+    if (trimmed.startsWith("```")) {
+      const lang = trimmed.slice(3).trim() || 'plaintext';
+      inCodeBlock = lang;
+      if (currentBlock) blocks.push(currentBlock);
+      currentBlock = { type: "code", lines: [], language: lang };
+      continue;
+    }
 
     // Callout opening / closing tags
     if (trimmed.startsWith("[alert]") || trimmed.startsWith("[warning]")) {
@@ -387,7 +607,8 @@ export const FormattedTextRenderer: React.FC<FormattedTextRendererProps> = React
         return (
           <code
             key={idx}
-            className="bg-gray-100 dark:bg-slate-700/80 text-primary dark:text-blue-400 font-mono text-[11px] px-1.5 py-0.5 rounded-md border border-gray-200 dark:border-slate-600 inline-block font-bold mx-0.5"
+            dir="ltr"
+            className="bg-slate-800 text-cyan-300 dark:bg-slate-900 dark:text-cyan-300 font-mono text-[11.5px] px-1.5 py-0.5 rounded-md border border-slate-700/80 inline-block font-bold mx-0.5 select-text shadow-xs"
           >
             {inner}
           </code>
@@ -434,6 +655,18 @@ export const FormattedTextRenderer: React.FC<FormattedTextRendererProps> = React
       className={`text-gray-700 dark:text-gray-200 leading-relaxed space-y-2 select-text ${className}`}
     >
       {blocks.map((block, bIdx) => {
+        // Academic Code Block
+        if (block.type === "code") {
+          return (
+            <AcademicCodeBlock
+              key={bIdx}
+              code={block.lines.join("\n")}
+              language={block.language}
+              compact={compact}
+            />
+          );
+        }
+
         // Headers (H1, H2, H3)
         if (block.type === "header") {
           const raw = block.lines.join("\n");

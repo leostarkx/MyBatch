@@ -996,12 +996,14 @@ export const CourseGradesView: React.FC<CourseGradesViewProps> = ({
                                   </div>
                                 </div>
                               </td>
-                              {cumulativeItems.map((asm) => {
+                              {cumulativeItems.map((asm, asmIdx) => {
                                 const cellKey = `${student.uid}__${asm.id}`;
                                 const cellVal = matrixGradesDraft[cellKey];
                                 return (
                                   <td key={asm.id} className="p-2 text-center">
                                     <input
+                                      data-matrix-sidx={idx}
+                                      data-matrix-asmidx={asmIdx}
                                       type="number"
                                       step="0.5"
                                       min={0}
@@ -1027,6 +1029,37 @@ export const CourseGradesView: React.FC<CourseGradesViewProps> = ({
                                             ...prev,
                                             [cellKey]: num,
                                           }));
+                                        }
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          e.preventDefault();
+                                          const nextRow = e.shiftKey ? idx - 1 : idx + 1;
+                                          const target = document.querySelector<HTMLInputElement>(
+                                            `input[data-matrix-sidx="${nextRow}"][data-matrix-asmidx="${asmIdx}"]`
+                                          );
+                                          if (target) {
+                                            target.focus();
+                                            target.select();
+                                          }
+                                        } else if (e.key === "ArrowDown") {
+                                          e.preventDefault();
+                                          const target = document.querySelector<HTMLInputElement>(
+                                            `input[data-matrix-sidx="${idx + 1}"][data-matrix-asmidx="${asmIdx}"]`
+                                          );
+                                          if (target) {
+                                            target.focus();
+                                            target.select();
+                                          }
+                                        } else if (e.key === "ArrowUp") {
+                                          e.preventDefault();
+                                          const target = document.querySelector<HTMLInputElement>(
+                                            `input[data-matrix-sidx="${idx - 1}"][data-matrix-asmidx="${asmIdx}"]`
+                                          );
+                                          if (target) {
+                                            target.focus();
+                                            target.select();
+                                          }
                                         }
                                       }}
                                       className="w-20 bg-gray-50 dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-xl px-2 py-1.5 text-center font-black text-gray-800 dark:text-white outline-none focus:ring-2 focus:ring-primary/30"

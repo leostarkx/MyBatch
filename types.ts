@@ -544,6 +544,8 @@ export interface Exam {
   type?: 'QUIZ' | 'MIDTERM' | 'FINAL' | 'PRACTICAL';
   notes?: string;
   maxScore?: number; // الدرجة القصوى (افتراضياً 10 أو 20)
+  passScore?: number; // درجة النجاح المحددة للامتحان (افتراضياً نصف الدرجة القصوى)
+  visibility?: 'PUBLIC' | 'PRIVATE'; // خصوصية النتائج: عامة للجميع أو خاصة لكل طالب
   isResultsPublished?: boolean; // تم إعلان ونشر النتائج للطلاب
   publishedAt?: number;
   publishedBy?: string;

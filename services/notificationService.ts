@@ -10,6 +10,37 @@ import {
 import { doc, writeBatch } from 'firebase/firestore';
 import { db, saveNotificationToFirestore, sanitizeForFirestore } from './firebase';
 
+const ALERTED_NOTIFS_PREFIX = 'dafaaty_alerted_notif_ids_';
+
+/**
+ * Returns the set of notification IDs that have already alerted the user (toast, chime, or push)
+ */
+export function getAlertedNotificationIds(userId?: string): Set<string> {
+  if (!userId || typeof window === 'undefined') return new Set();
+  try {
+    const raw = localStorage.getItem(`${ALERTED_NOTIFS_PREFIX}${userId}`);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Marks one or more notification IDs as alerted so they never trigger toasts, chimes, or push again
+ */
+export function markNotificationIdsAsAlerted(userId: string | undefined, notifIds: string[]) {
+  if (!userId || !notifIds.length || typeof window === 'undefined') return;
+  try {
+    const current = getAlertedNotificationIds(userId);
+    notifIds.forEach((id) => current.add(id));
+    // Keep last 300 IDs to avoid unbounded localStorage growth
+    const trimmed = Array.from(current).slice(-300);
+    localStorage.setItem(`${ALERTED_NOTIFS_PREFIX}${userId}`, JSON.stringify(trimmed));
+  } catch {}
+}
+
 /**
  * Safely returns a user's resolved NotificationPreferences, merging defaults
  */

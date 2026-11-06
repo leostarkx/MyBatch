@@ -880,10 +880,26 @@ export async function saveSettingToFirestore(key: string, data: any) {
 
 // Notifications
 export function subscribeNotifications(userId: string, callback: (items: Notification[]) => void) {
-  // Immediately provide cached / Supabase notifications so student/user sees alerts right away
+  let isSubscribed = true;
+  let currentNotifsMap = new Map<string, Notification>();
+
+  const emitMerged = (newItems: Notification[]) => {
+    if (!isSubscribed) return;
+    newItems.forEach((item) => {
+      currentNotifsMap.set(item.id, item);
+    });
+    const sorted = Array.from(currentNotifsMap.values()).sort(
+      (a, b) => (b.timestamp || 0) - (a.timestamp || 0)
+    );
+    callback(sorted);
+  };
+
+  // Provide initial cached/Supabase notifications without wiping
   getNotificationsSupabase(userId)
     .then((items) => {
-      if (items && items.length > 0) callback(items);
+      if (items && items.length > 0 && isSubscribed) {
+        emitMerged(items);
+      }
     })
     .catch(() => {});
 
@@ -892,23 +908,32 @@ export function subscribeNotifications(userId: string, callback: (items: Notific
     where('userId', '==', userId),
     limit(50)
   );
-  return onSnapshot(
+
+  const unsubFirestore = onSnapshot(
     q,
     (snapshot) => {
       const list = snapshot.docs.map((doc) => doc.data() as Notification);
-      list.sort((a, b) => b.timestamp - a.timestamp);
-      callback(list);
+      emitMerged(list);
     },
     (err) => {
       if (isQuotaError(err)) {
         notifyQuotaExceeded();
         console.warn('Firestore quota exceeded on notifications; falling back to Supabase/local.');
-        getNotificationsSupabase(userId).then(callback).catch(() => {});
+        getNotificationsSupabase(userId)
+          .then((items) => {
+            if (isSubscribed && items) emitMerged(items);
+          })
+          .catch(() => {});
         return;
       }
       console.warn('subscribeNotifications error:', err);
     }
   );
+
+  return () => {
+    isSubscribed = false;
+    unsubFirestore();
+  };
 }
 export async function saveNotificationToFirestore(notif: Notification) {
   saveNotificationSupabase(notif).catch(() => {});

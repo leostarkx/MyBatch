@@ -1,6 +1,6 @@
 {
-  "summary": "خطة شاملة ومفصلة لحل مشكلة إعادة تعيين (Reset) درجات الامتحانات والدرجة القصوى أثناء إدخال الدرجات للطلاب، ومنع مسح المسودات، وتحصين المزامنة اللحظية (Realtime Sync) لضمان حفظ كل مدخل بأمان.",
-  "updatedAt": "2026-11-05T09:23:16.699707442Z",
+  "summary": "خطة معمارية تفصيلية لدعم تنسيق وترتيب الأكواد البرمجية (Code Formatting & Syntax Highlighting) داخل المحرر المرئي (RichTextEditor) وعارض النصوص (FormattedTextRenderer)، مع دعم تمييز لغات C++ و C و Python و Java و SQL، وترقيم الأسطر وزر النسخ السريع.",
+  "updatedAt": "2026-11-06T08:26:09.414848320Z",
   "requestFeedback": true,
   "userFacing": true
 }
