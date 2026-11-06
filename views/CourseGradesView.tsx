@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   GraduationCap,
   Plus,
@@ -161,21 +161,55 @@ export const CourseGradesView: React.FC<CourseGradesViewProps> = ({
   handleViewProfile,
   onOpenNicknameModal,
 }) => {
-  const batchStudents = appUsers
-    .filter((u) => {
-      if (u.role === UserRole.OWNER) return false;
-      if (u.excludeFromStats) return false;
-      if (u.batchCode === effectiveBatchCode) return true;
-      if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode))
-        return true;
-      return false;
-    })
-    .sort((a, b) =>
-      compareArabicNames(
-        a.repNickname?.trim() || a.name,
-        b.repNickname?.trim() || b.name
-      )
+  const batchStudents = useMemo(() => {
+    return appUsers
+      .filter((u) => {
+        if (u.role === UserRole.OWNER) return false;
+        if (u.excludeFromStats) return false;
+        if (u.batchCode === effectiveBatchCode) return true;
+        if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode))
+          return true;
+        return false;
+      })
+      .sort((a, b) =>
+        compareArabicNames(
+          a.repNickname?.trim() || a.name,
+          b.repNickname?.trim() || b.name
+        )
+      );
+  }, [appUsers, effectiveBatchCode]);
+
+  // Progressive limits for large student grade sheets (Zero freeze / 60 FPS)
+  const [editorLimit, setEditorLimit] = useState(30);
+  const [matrixLimit, setMatrixLimit] = useState(35);
+
+  const filteredGradingStudents = useMemo(() => {
+    const q = gradeEditorSearch.trim().toLowerCase();
+    if (!q) return batchStudents;
+    return batchStudents.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.repNickname && s.repNickname.toLowerCase().includes(q))
     );
+  }, [batchStudents, gradeEditorSearch]);
+
+  const visibleGradingStudents = useMemo(() => {
+    return filteredGradingStudents.slice(0, editorLimit);
+  }, [filteredGradingStudents, editorLimit]);
+
+  const filteredMatrixStudents = useMemo(() => {
+    const q = gradeEditorSearch.trim().toLowerCase();
+    if (!q) return batchStudents;
+    return batchStudents.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.repNickname && s.repNickname.toLowerCase().includes(q))
+    );
+  }, [batchStudents, gradeEditorSearch]);
+
+  const visibleMatrixStudents = useMemo(() => {
+    return filteredMatrixStudents.slice(0, matrixLimit);
+  }, [filteredMatrixStudents, matrixLimit]);
 
   // Quick Assessment Presets for Representative
   const assessmentPresets = [
@@ -689,21 +723,7 @@ export const CourseGradesView: React.FC<CourseGradesViewProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50 dark:divide-slate-700">
-                      {batchStudents
-                        .filter((s) => {
-                          const q = gradeEditorSearch.toLowerCase();
-                          return (
-                            s.name.toLowerCase().includes(q) ||
-                            (s.repNickname && s.repNickname.toLowerCase().includes(q))
-                          );
-                        })
-                        .sort((a, b) =>
-                          compareArabicNames(
-                            a.repNickname?.trim() || a.name,
-                            b.repNickname?.trim() || b.name
-                          )
-                        )
-                        .map((student, idx) => (
+                      {visibleGradingStudents.map((student, idx) => (
                           <tr
                             key={student.uid}
                             className="hover:bg-gray-50/70 dark:hover:bg-slate-700/40"
@@ -808,6 +828,18 @@ export const CourseGradesView: React.FC<CourseGradesViewProps> = ({
                     </tbody>
                   </table>
                 </div>
+
+                {editorLimit < filteredGradingStudents.length && (
+                  <div className="mt-3 text-center">
+                    <button
+                      type="button"
+                      onClick={() => setEditorLimit((prev) => prev + 30)}
+                      className="px-5 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-xs font-bold text-gray-700 dark:text-gray-200 transition cursor-pointer"
+                    >
+                      عرض 30 طالباً إضافياً (متبقي {filteredGradingStudents.length - editorLimit}) +
+                    </button>
+                  </div>
+                )}
 
                 <div className="flex justify-between items-center gap-2 mt-4 pt-4 border-t border-gray-100 dark:border-slate-700">
                   <span className="text-xs text-gray-500 font-bold">
@@ -922,21 +954,7 @@ export const CourseGradesView: React.FC<CourseGradesViewProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-slate-700 text-xs">
-                      {batchStudents
-                        .filter((s) => {
-                          const q = gradeEditorSearch.toLowerCase();
-                          return (
-                            s.name.toLowerCase().includes(q) ||
-                            (s.repNickname && s.repNickname.toLowerCase().includes(q))
-                          );
-                        })
-                        .sort((a, b) =>
-                          compareArabicNames(
-                            a.repNickname?.trim() || a.name,
-                            b.repNickname?.trim() || b.name
-                          )
-                        )
-                        .map((student, idx) => {
+                      {visibleMatrixStudents.map((student, idx) => {
                           let studentCumulativeTotal = 0;
                           let hasAnyRecorded = false;
 
@@ -1088,6 +1106,25 @@ export const CourseGradesView: React.FC<CourseGradesViewProps> = ({
                     </tbody>
                   </table>
                 </div>
+
+                {matrixLimit < filteredMatrixStudents.length && (
+                  <div className="py-2.5 text-center bg-gray-50 dark:bg-slate-700/30 rounded-xl mt-2 flex items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setMatrixLimit((prev) => prev + 35)}
+                      className="px-5 py-2 rounded-xl bg-white dark:bg-slate-700 hover:bg-gray-100 text-xs font-bold text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-slate-600 shadow-xs transition cursor-pointer"
+                    >
+                      عرض 35 طالباً إضافياً بالكشف (متبقي {filteredMatrixStudents.length - matrixLimit}) +
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMatrixLimit(filteredMatrixStudents.length)}
+                      className="text-xs text-primary hover:underline font-bold cursor-pointer"
+                    >
+                      عرض الكل ({filteredMatrixStudents.length})
+                    </button>
+                  </div>
+                )}
 
                 <div className="flex justify-between items-center gap-3 pt-4 mt-3 border-t border-gray-100 dark:border-slate-700">
                   <button

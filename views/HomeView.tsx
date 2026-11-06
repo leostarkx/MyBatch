@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useMemo } from "react";
 import {
   Bell,
   Plus,
@@ -227,12 +227,23 @@ export const HomeView: React.FC<HomeViewProps> = ({
     setNewAnnouncementPriority("normal");
   };
 
-  // Sort: pinned first, then newest
-  const sortedHomeAnnouncements = [...announcements].sort((a, b) => {
-    if (a.isPinned && !b.isPinned) return -1;
-    if (!a.isPinned && b.isPinned) return 1;
-    return b.timestamp - a.timestamp;
-  });
+  const [visibleAnnouncementsCount, setVisibleAnnouncementsCount] = useState(10);
+
+  // Sort: pinned first, then newest (Memoized for zero-lag rendering)
+  const sortedHomeAnnouncements = useMemo(() => {
+    return [...announcements].sort((a, b) => {
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      return b.timestamp - a.timestamp;
+    });
+  }, [announcements]);
+
+  const visibleAnnouncements = useMemo(() => {
+    return sortedHomeAnnouncements.slice(0, visibleAnnouncementsCount);
+  }, [sortedHomeAnnouncements, visibleAnnouncementsCount]);
+
+  const hasMoreAnnouncements = visibleAnnouncementsCount < sortedHomeAnnouncements.length;
+  const remainingAnnouncementsCount = sortedHomeAnnouncements.length - visibleAnnouncementsCount;
 
   const upcomingHomeAssignments = [...assignments]
     .sort((a, b) => a.dueTimestamp - b.dueTimestamp)
@@ -435,7 +446,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
       {/* Announcements List (Pinned First) */}
       <div className="space-y-4">
-        {sortedHomeAnnouncements.map((ann) => {
+        {visibleAnnouncements.map((ann) => {
           const totalPollVotes = ann.poll
             ? ann.poll.options.reduce((acc, o) => acc + (o.votes?.length || 0), 0)
             : 0;
@@ -710,6 +721,43 @@ export const HomeView: React.FC<HomeViewProps> = ({
             </div>
           );
         })}
+
+        {hasMoreAnnouncements && (
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => setVisibleAnnouncementsCount((prev) => prev + 10)}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-slate-700 shadow-sm text-xs font-bold transition active:scale-95 cursor-pointer"
+            >
+              <span>عرض المزيد من التبليغات (متبقي {remainingAnnouncementsCount})</span>
+              <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-bold">
+                +10
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setVisibleAnnouncementsCount(sortedHomeAnnouncements.length)}
+              className="text-xs text-gray-500 dark:text-gray-400 hover:text-primary transition underline cursor-pointer"
+            >
+              عرض الكل ({sortedHomeAnnouncements.length})
+            </button>
+          </div>
+        )}
+
+        {visibleAnnouncementsCount > 10 && !hasMoreAnnouncements && sortedHomeAnnouncements.length > 10 && (
+          <div className="pt-2 text-center">
+            <button
+              type="button"
+              onClick={() => {
+                setVisibleAnnouncementsCount(10);
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+              className="text-xs text-gray-400 hover:text-primary transition underline cursor-pointer"
+            >
+              طي التبليغات إلى أحدث 10 ↑
+            </button>
+          </div>
+        )}
 
         {announcements.length === 0 && (
           <div className="text-center py-12 text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-gray-100 dark:border-slate-700 border-dashed">

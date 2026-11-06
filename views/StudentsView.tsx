@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   Users,
   Search,
@@ -89,46 +89,87 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
 
   const isMainAdmin = isOwner || currentUser?.role === UserRole.REPRESENTATIVE;
 
-  // Filter students
-  const batchStudents = appUsers.filter((u) => {
-    if (u.role === UserRole.OWNER) return false;
-    if (u.batchCode === effectiveBatchCode) return true;
-    if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode)) return true;
-    return false;
-  });
+  // Filter students (Memoized to prevent continuous garbage collection and DOM churn)
+  const batchStudents = useMemo(() => {
+    return appUsers.filter((u) => {
+      if (u.role === UserRole.OWNER) return false;
+      if (u.batchCode === effectiveBatchCode) return true;
+      if (u.isOfficial && (!u.batchCode || u.batchCode === effectiveBatchCode)) return true;
+      return false;
+    });
+  }, [appUsers, effectiveBatchCode]);
 
-  const officialStudents = batchStudents.filter((u) => u.isOfficial);
+  const officialStudents = useMemo(() => batchStudents.filter((u) => u.isOfficial), [batchStudents]);
   const totalBatchCount = batchStudents.length;
-  const includedCount = batchStudents.filter((u) => !u.excludeFromStats).length;
-  const excludedCount = batchStudents.filter((u) => !!u.excludeFromStats).length;
-  const unassignedGroupCount = batchStudents.filter(
-    (u) => !u.excludeFromStats && !u.academicGroup
-  ).length;
+  const includedCount = useMemo(() => batchStudents.filter((u) => !u.excludeFromStats).length, [batchStudents]);
+  const excludedCount = useMemo(() => batchStudents.filter((u) => !!u.excludeFromStats).length, [batchStudents]);
+  const unassignedGroupCount = useMemo(
+    () => batchStudents.filter((u) => !u.excludeFromStats && !u.academicGroup).length,
+    [batchStudents]
+  );
 
-  const filteredByInclusion = batchStudents.filter((u) => {
-    if (studentStatsFilter === "INCLUDED") return !u.excludeFromStats;
-    if (studentStatsFilter === "EXCLUDED") return !!u.excludeFromStats;
-    return true;
-  });
+  const filteredByInclusion = useMemo(() => {
+    return batchStudents.filter((u) => {
+      if (studentStatsFilter === "INCLUDED") return !u.excludeFromStats;
+      if (studentStatsFilter === "EXCLUDED") return !!u.excludeFromStats;
+      return true;
+    });
+  }, [batchStudents, studentStatsFilter]);
 
-  const filteredByGroup = filteredByInclusion.filter((u) => {
-    if (studentGroupFilter === "ALL") return true;
-    if (studentGroupFilter === "UNASSIGNED") return !u.academicGroup;
-    return u.academicGroup === studentGroupFilter;
-  });
+  const filteredByGroup = useMemo(() => {
+    return filteredByInclusion.filter((u) => {
+      if (studentGroupFilter === "ALL") return true;
+      if (studentGroupFilter === "UNASSIGNED") return !u.academicGroup;
+      return u.academicGroup === studentGroupFilter;
+    });
+  }, [filteredByInclusion, studentGroupFilter]);
 
-  const displayedStudents = filteredByGroup
-    .filter((u) => {
-      if (!studentDirectorySearch.trim()) return true;
-      const q = studentDirectorySearch.toLowerCase();
-      return (
-        u.name.toLowerCase().includes(q) ||
-        (u.username && u.username.toLowerCase().includes(q)) ||
-        (u.email && u.email.toLowerCase().includes(q)) ||
-        (u.academicGroup && u.academicGroup.toLowerCase().includes(q))
-      );
-    })
-    .sort((a, b) => compareArabicNames(a.name, b.name));
+  const displayedStudents = useMemo(() => {
+    const q = studentDirectorySearch.trim().toLowerCase();
+    const list = q
+      ? filteredByGroup.filter((u) => {
+          return (
+            u.name.toLowerCase().includes(q) ||
+            (u.username && u.username.toLowerCase().includes(q)) ||
+            (u.email && u.email.toLowerCase().includes(q)) ||
+            (u.academicGroup && u.academicGroup.toLowerCase().includes(q))
+          );
+        })
+      : filteredByGroup;
+    return [...list].sort((a, b) => compareArabicNames(a.name, b.name));
+  }, [filteredByGroup, studentDirectorySearch]);
+
+  // Progressive rendering: initial 25 students + smooth auto-load on scroll
+  const [renderLimit, setRenderLimit] = useState(25);
+  const observerSentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setRenderLimit(25);
+  }, [studentDirectorySearch, studentStatsFilter, studentGroupFilter]);
+
+  useEffect(() => {
+    const sentinel = observerSentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setRenderLimit((prev) => Math.min(displayedStudents.length, prev + 25));
+        }
+      },
+      { rootMargin: "300px" }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [displayedStudents.length]);
+
+  const visibleStudents = useMemo(() => {
+    return displayedStudents.slice(0, renderLimit);
+  }, [displayedStudents, renderLimit]);
+
+  const hasMoreStudents = renderLimit < displayedStudents.length;
+  const remainingStudentsCount = displayedStudents.length - renderLimit;
 
   const handleAddStudentSubmit = async () => {
     if (!newStudentName.trim()) return;
@@ -442,7 +483,7 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
         <div>
           {displayedStudents.length > 0 ? (
             <div className="divide-y divide-gray-50 dark:divide-slate-700">
-              {displayedStudents.map((student, idx) => {
+              {visibleStudents.map((student, idx) => {
                 const isRep = student.role === UserRole.REPRESENTATIVE;
                 const isAssistant = student.role === UserRole.ASSISTANT_REP;
                 const isExcluded = !!student.excludeFromStats;
@@ -644,6 +685,27 @@ export const StudentsView: React.FC<StudentsViewProps> = ({
           ) : (
             <div className="text-center py-12 text-gray-400 text-xs">
               لا توجد حسابات تطابق البحث أو الفلتر المحدد.
+            </div>
+          )}
+
+          {hasMoreStudents && (
+            <div
+              ref={observerSentinelRef}
+              className="p-4 border-t border-gray-100 dark:border-slate-700 bg-gray-50/50 dark:bg-slate-700/20 flex flex-col sm:flex-row items-center justify-between gap-3"
+            >
+              <span className="text-xs text-gray-500 font-bold">
+                عرض {visibleStudents.length} من أصل {displayedStudents.length} طالباً
+              </span>
+              <button
+                type="button"
+                onClick={() => setRenderLimit((prev) => Math.min(displayedStudents.length, prev + 25))}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-slate-600 shadow-xs text-xs font-bold transition active:scale-95 cursor-pointer"
+              >
+                <span>تحميل الدفعة التالية (متبقي {remainingStudentsCount})</span>
+                <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-bold">
+                  +25
+                </span>
+              </button>
             </div>
           )}
         </div>

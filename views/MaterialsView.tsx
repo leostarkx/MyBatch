@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useMemo } from "react";
 import {
   BookOpen,
   HelpCircle,
@@ -97,6 +97,8 @@ export const MaterialsView: React.FC<MaterialsViewProps> = ({
 
   const [materialSearchQuery, setMaterialSearchQuery] = useState("");
   const [materialFilterMode, setMaterialFilterMode] = useState<"ALL" | "BOOKMARKED" | "STUDIED" | "UNSTUDIED">("ALL");
+  const [sectionMatLimit, setSectionMatLimit] = useState(12);
+  const [globalMatLimit, setGlobalMatLimit] = useState(15);
 
   // Modals state
   const [isAddingSection, setIsAddingSection] = useState(false);
@@ -438,7 +440,7 @@ export const MaterialsView: React.FC<MaterialsViewProps> = ({
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {sectionMaterials.map((mat) => renderMaterialCard(mat, false))}
+          {sectionMaterials.slice(0, sectionMatLimit).map((mat) => renderMaterialCard(mat, false))}
           {sectionMaterials.length === 0 && (
             <div className="col-span-full py-16 text-center text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-gray-100 dark:border-slate-700 border-dashed">
               <BookOpen size={48} className="mx-auto mb-2 opacity-30 text-primary" />
@@ -449,6 +451,25 @@ export const MaterialsView: React.FC<MaterialsViewProps> = ({
             </div>
           )}
         </div>
+
+        {sectionMatLimit < sectionMaterials.length && (
+          <div className="pt-2 text-center flex items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => setSectionMatLimit((prev) => prev + 12)}
+              className="px-6 py-2.5 rounded-2xl bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-slate-700 shadow-sm text-xs font-bold transition active:scale-95 cursor-pointer"
+            >
+              عرض المزيد من المحاضرات (متبقي {sectionMaterials.length - sectionMatLimit}) +12
+            </button>
+            <button
+              type="button"
+              onClick={() => setSectionMatLimit(sectionMaterials.length)}
+              className="text-xs text-primary hover:underline font-bold cursor-pointer"
+            >
+              عرض الكل ({sectionMaterials.length})
+            </button>
+          </div>
+        )}
 
         {/* Add Material Modal */}
         {isAddingMaterial && (
@@ -945,7 +966,7 @@ export const MaterialsView: React.FC<MaterialsViewProps> = ({
               </div>
 
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {globalMatchingMaterials.map((mat) => renderMaterialCard(mat, true))}
+                {globalMatchingMaterials.slice(0, globalMatLimit).map((mat) => renderMaterialCard(mat, true))}
                 {globalMatchingMaterials.length === 0 && (
                   <div className="col-span-full py-16 text-center text-gray-400 dark:text-gray-500 bg-white dark:bg-slate-800 rounded-3xl border border-gray-100 dark:border-slate-700 border-dashed">
                     <Search size={40} className="mx-auto mb-2 opacity-30 text-gray-400" />
@@ -953,6 +974,25 @@ export const MaterialsView: React.FC<MaterialsViewProps> = ({
                   </div>
                 )}
               </div>
+
+              {globalMatLimit < globalMatchingMaterials.length && (
+                <div className="pt-2 text-center flex items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setGlobalMatLimit((prev) => prev + 15)}
+                    className="px-6 py-2.5 rounded-2xl bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-slate-700 shadow-sm text-xs font-bold transition active:scale-95 cursor-pointer"
+                  >
+                    عرض المزيد من نتائج البحث (متبقي {globalMatchingMaterials.length - globalMatLimit}) +15
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGlobalMatLimit(globalMatchingMaterials.length)}
+                    className="text-xs text-primary hover:underline font-bold cursor-pointer"
+                  >
+                    عرض كل النتائج ({globalMatchingMaterials.length})
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             /* Courses List */

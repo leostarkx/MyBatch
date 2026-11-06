@@ -935,7 +935,8 @@ export default function App() {
     };
   }, [currentUser?.role]);
 
-  // 1. All Batch Collections: Eagerly load & sync with Supabase Realtime (zero quota limits)
+  // 1. Core Batch Collections (Announcements, Courses, Schedules, Assignments, Exams)
+  // Eagerly loaded for fast startup (Home View, Countdown Strip & Notifications)
   useEffect(() => {
     if (!effectiveBatchCode) {
       setAnnouncements([]);
@@ -943,18 +944,9 @@ export default function App() {
       setSchedules([]);
       setAssignments([]);
       setExams([]);
-      setAttendanceSessions([]);
-      setAttendanceRecords([]);
-      setGrades([]);
-      setMaterialSections([]);
-      setMaterials([]);
-      setProjects([]);
-      setStudentSummaries([]);
-      setBatchSuggestions([]);
       return;
     }
 
-    // Load from Supabase (fast, zero quota limits)
     getAnnouncementsSupabase(effectiveBatchCode).then((items) => {
       if (items && items.length > 0) setAnnouncements(items);
     });
@@ -970,32 +962,7 @@ export default function App() {
     getExamsSupabase(effectiveBatchCode).then((items) => {
       if (items && items.length > 0) setExams(items);
     });
-    getAttendanceSessionsSupabase(effectiveBatchCode).then((items) => {
-      if (items && items.length > 0) setAttendanceSessions(items);
-    });
-    getAttendanceRecordsSupabase(effectiveBatchCode).then((items) => {
-      if (items && items.length > 0) setAttendanceRecords(items);
-    });
-    getGradesSupabase(effectiveBatchCode).then((items) => {
-      if (items && items.length > 0) setGrades(items);
-    });
-    getMaterialSectionsSupabase(effectiveBatchCode).then((items) => {
-      if (items && items.length > 0) setMaterialSections(items);
-    });
-    getMaterialsSupabase(effectiveBatchCode).then((items) => {
-      if (items && items.length > 0) setMaterials(items);
-    });
-    getProjectsSupabase(effectiveBatchCode).then((items) => {
-      if (items && items.length > 0) setProjects(items);
-    });
-    getStudentSummariesSupabase(effectiveBatchCode).then((items) => {
-      if (items && items.length > 0) setStudentSummaries(items);
-    });
-    getBatchSuggestionsSupabase(effectiveBatchCode).then((items) => {
-      if (items && items.length > 0) setBatchSuggestions(items);
-    });
 
-    // Supabase Realtime channels
     const unsubSbAnn = subscribeTableSupabase('announcements', effectiveBatchCode, () => {
       getAnnouncementsSupabase(effectiveBatchCode).then(setAnnouncements);
     });
@@ -1011,32 +978,7 @@ export default function App() {
     const unsubSbExams = subscribeTableSupabase('exams', effectiveBatchCode, () => {
       getExamsSupabase(effectiveBatchCode).then(setExams);
     });
-    const unsubSbAttSessions = subscribeTableSupabase('attendance_sessions', effectiveBatchCode, () => {
-      getAttendanceSessionsSupabase(effectiveBatchCode).then(setAttendanceSessions);
-    });
-    const unsubSbAttRecords = subscribeTableSupabase('attendance_records', effectiveBatchCode, () => {
-      getAttendanceRecordsSupabase(effectiveBatchCode).then(setAttendanceRecords);
-    });
-    const unsubSbGrades = subscribeTableSupabase('grades', effectiveBatchCode, () => {
-      getGradesSupabase(effectiveBatchCode).then(setGrades);
-    });
-    const unsubSbSections = subscribeTableSupabase('material_sections', effectiveBatchCode, () => {
-      getMaterialSectionsSupabase(effectiveBatchCode).then(setMaterialSections);
-    });
-    const unsubSbMaterials = subscribeTableSupabase('materials', effectiveBatchCode, () => {
-      getMaterialsSupabase(effectiveBatchCode).then(setMaterials);
-    });
-    const unsubSbProjects = subscribeTableSupabase('projects', effectiveBatchCode, () => {
-      getProjectsSupabase(effectiveBatchCode).then(setProjects);
-    });
-    const unsubSbSummaries = subscribeTableSupabase('student_summaries', effectiveBatchCode, () => {
-      getStudentSummariesSupabase(effectiveBatchCode).then(setStudentSummaries);
-    });
-    const unsubSbSuggestions = subscribeTableSupabase('batch_suggestions', effectiveBatchCode, () => {
-      getBatchSuggestionsSupabase(effectiveBatchCode).then(setBatchSuggestions);
-    });
 
-    // Firestore fallback listeners (safely catches quota errors in firebase.ts)
     const unsubAnnouncements = subscribeAnnouncements(effectiveBatchCode, (items) => {
       if (items && items.length > 0) setAnnouncements(items);
     });
@@ -1052,24 +994,180 @@ export default function App() {
     const unsubExams = subscribeExams(effectiveBatchCode, (items) => {
       if (items && items.length > 0) setExams(items);
     });
+
+    return () => {
+      unsubSbAnn();
+      unsubSbCourses();
+      unsubSbSchedules();
+      unsubSbAssignments();
+      unsubSbExams();
+      unsubAnnouncements();
+      unsubCourses();
+      unsubSchedules();
+      unsubAssignments();
+      unsubExams();
+    };
+  }, [effectiveBatchCode]);
+
+  // 2. Grades Collection (Loaded On-Demand when user opens Grades, Courses, or Academic Path)
+  useEffect(() => {
+    if (!effectiveBatchCode) {
+      setGrades([]);
+      return;
+    }
+    const isGradesRelevantTab =
+      activeTab === Tab.GRADES ||
+      activeTab === Tab.COURSES ||
+      activeTab === Tab.ACADEMIC_PATH;
+    if (!isGradesRelevantTab) return;
+
+    getGradesSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setGrades(items);
+    });
+
+    const unsubSbGrades = subscribeTableSupabase('grades', effectiveBatchCode, () => {
+      getGradesSupabase(effectiveBatchCode).then(setGrades);
+    });
+    const unsubGrades = subscribeGrades(effectiveBatchCode, (items) => {
+      if (items && items.length > 0) setGrades(items);
+    });
+
+    return () => {
+      unsubSbGrades();
+      unsubGrades();
+    };
+  }, [effectiveBatchCode, activeTab]);
+
+  // 3. Attendance Collections (Loaded On-Demand when user opens Attendance or Students tab)
+  useEffect(() => {
+    if (!effectiveBatchCode) {
+      setAttendanceSessions([]);
+      setAttendanceRecords([]);
+      return;
+    }
+    const isAttendanceRelevantTab =
+      activeTab === Tab.ATTENDANCE || activeTab === Tab.STUDENTS;
+    if (!isAttendanceRelevantTab) return;
+
+    getAttendanceSessionsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setAttendanceSessions(items);
+    });
+    getAttendanceRecordsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setAttendanceRecords(items);
+    });
+
+    const unsubSbAttSessions = subscribeTableSupabase('attendance_sessions', effectiveBatchCode, () => {
+      getAttendanceSessionsSupabase(effectiveBatchCode).then(setAttendanceSessions);
+    });
+    const unsubSbAttRecords = subscribeTableSupabase('attendance_records', effectiveBatchCode, () => {
+      getAttendanceRecordsSupabase(effectiveBatchCode).then(setAttendanceRecords);
+    });
+
     const unsubSessions = subscribeAttendanceSessions(effectiveBatchCode, (items) => {
       if (items && items.length > 0) setAttendanceSessions(items);
     });
     const unsubRecords = subscribeAttendanceRecords(effectiveBatchCode, (items) => {
       if (items && items.length > 0) setAttendanceRecords(items);
     });
-    const unsubGrades = subscribeGrades(effectiveBatchCode, (items) => {
-      if (items && items.length > 0) setGrades(items);
+
+    return () => {
+      unsubSbAttSessions();
+      unsubSbAttRecords();
+      unsubSessions();
+      unsubRecords();
+    };
+  }, [effectiveBatchCode, activeTab]);
+
+  // 4. Materials & Sections Collections (Loaded On-Demand when user opens Materials or Study Hub)
+  useEffect(() => {
+    if (!effectiveBatchCode) {
+      setMaterialSections([]);
+      setMaterials([]);
+      return;
+    }
+    const isMaterialsRelevantTab =
+      activeTab === Tab.MATERIALS || activeTab === Tab.STUDY_HUB;
+    if (!isMaterialsRelevantTab) return;
+
+    getMaterialSectionsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setMaterialSections(items);
     });
+    getMaterialsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setMaterials(items);
+    });
+
+    const unsubSbSections = subscribeTableSupabase('material_sections', effectiveBatchCode, () => {
+      getMaterialSectionsSupabase(effectiveBatchCode).then(setMaterialSections);
+    });
+    const unsubSbMaterials = subscribeTableSupabase('materials', effectiveBatchCode, () => {
+      getMaterialsSupabase(effectiveBatchCode).then(setMaterials);
+    });
+
     const unsubSections = subscribeMaterialSections(effectiveBatchCode, (items) => {
       if (items && items.length > 0) setMaterialSections(items);
     });
     const unsubMaterials = subscribeMaterials(effectiveBatchCode, (items) => {
       if (items && items.length > 0) setMaterials(items);
     });
+
+    return () => {
+      unsubSbSections();
+      unsubSbMaterials();
+      unsubSections();
+      unsubMaterials();
+    };
+  }, [effectiveBatchCode, activeTab]);
+
+  // 5. Projects Collection (Loaded On-Demand when user opens Projects tab)
+  useEffect(() => {
+    if (!effectiveBatchCode) {
+      setProjects([]);
+      return;
+    }
+    if (activeTab !== Tab.PROJECTS) return;
+
+    getProjectsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setProjects(items);
+    });
+
+    const unsubSbProjects = subscribeTableSupabase('projects', effectiveBatchCode, () => {
+      getProjectsSupabase(effectiveBatchCode).then(setProjects);
+    });
     const unsubProjects = subscribeProjects(effectiveBatchCode, (items) => {
       if (items && items.length > 0) setProjects(items);
     });
+
+    return () => {
+      unsubSbProjects();
+      unsubProjects();
+    };
+  }, [effectiveBatchCode, activeTab]);
+
+  // 6. Community Collections: Summaries & Suggestions (Loaded On-Demand when user opens Community Hub or Summaries)
+  useEffect(() => {
+    if (!effectiveBatchCode) {
+      setStudentSummaries([]);
+      setBatchSuggestions([]);
+      return;
+    }
+    const isCommunityRelevantTab =
+      activeTab === Tab.COMMUNITY_HUB || activeTab === Tab.SUMMARIES;
+    if (!isCommunityRelevantTab) return;
+
+    getStudentSummariesSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setStudentSummaries(items);
+    });
+    getBatchSuggestionsSupabase(effectiveBatchCode).then((items) => {
+      if (items && items.length > 0) setBatchSuggestions(items);
+    });
+
+    const unsubSbSummaries = subscribeTableSupabase('student_summaries', effectiveBatchCode, () => {
+      getStudentSummariesSupabase(effectiveBatchCode).then(setStudentSummaries);
+    });
+    const unsubSbSuggestions = subscribeTableSupabase('batch_suggestions', effectiveBatchCode, () => {
+      getBatchSuggestionsSupabase(effectiveBatchCode).then(setBatchSuggestions);
+    });
+
     const unsubSummaries = subscribeStudentSummaries(effectiveBatchCode, (items) => {
       if (items && items.length > 0) setStudentSummaries(items);
     });
@@ -1078,34 +1176,12 @@ export default function App() {
     });
 
     return () => {
-      unsubSbAnn();
-      unsubSbCourses();
-      unsubSbSchedules();
-      unsubSbAssignments();
-      unsubSbExams();
-      unsubSbAttSessions();
-      unsubSbAttRecords();
-      unsubSbGrades();
-      unsubSbSections();
-      unsubSbMaterials();
-      unsubSbProjects();
       unsubSbSummaries();
       unsubSbSuggestions();
-      unsubAnnouncements();
-      unsubCourses();
-      unsubSchedules();
-      unsubAssignments();
-      unsubExams();
-      unsubSessions();
-      unsubRecords();
-      unsubGrades();
-      unsubSections();
-      unsubMaterials();
-      unsubProjects();
       unsubSummaries();
       unsubSuggestions();
     };
-  }, [effectiveBatchCode]);
+  }, [effectiveBatchCode, activeTab]);
 
   // 2. Chat Messages: Subscribe when on Chat or Community Hub tab
   useEffect(() => {
